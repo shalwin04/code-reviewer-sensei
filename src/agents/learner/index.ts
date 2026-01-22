@@ -3,7 +3,7 @@ import { StructuredOutputParser } from "@langchain/core/output_parsers";
 import { PromptTemplate } from "@langchain/core/prompts";
 import { z } from "zod";
 import { createLLM } from "../../utils/llm.js";
-import { getKnowledgeStore } from "../../knowledge/store.js";
+import { getSupabaseKnowledgeStore } from "../../knowledge/supabase-store.js";
 import { config } from "../../config/index.js";
 import type { Convention, LearnerState } from "../../types/index.js";
 
@@ -317,21 +317,47 @@ async function storeConventions(
     `💾 Learner Agent: Storing ${state.extractedConventions.length} conventions...`
   );
 
-  const store = await getKnowledgeStore(config.knowledgeStore.path);
-
-  // Deduplicate and merge similar conventions
-  const uniqueConventions = deduplicateConventions(state.extractedConventions);
-
-  for (const convention of uniqueConventions) {
-    store.addConvention(convention);
+  // Get repository name from config
+  const repoFullName = config.repository.fullName;
+  if (!repoFullName) {
+    throw new Error("Repository full name not configured. Set REPOSITORY_FULL_NAME in .env or pass --repo flag.");
   }
 
-  await store.saveToDisk();
+  const store = await getSupabaseKnowledgeStore(repoFullName);
 
-  return {
-    processingStatus: "complete",
-    extractedConventions: uniqueConventions,
-  };
+  // Start a learning run to track this session
+  const runId = await store.startLearningRun();
+
+  try {
+    // Deduplicate and merge similar conventions
+    const uniqueConventions = deduplicateConventions(state.extractedConventions);
+
+    // Store conventions in Supabase
+    const added = await store.addConventions(uniqueConventions, runId);
+
+    // Complete the learning run with summary
+    await store.completeLearningRun(runId, {
+      sources: {
+        codebase: state.sources.codebase.length,
+        adrs: state.sources.adrs.length,
+        prReviews: state.sources.prReviews.length,
+        incidents: state.sources.incidents.length,
+      },
+      found: state.extractedConventions.length,
+      added,
+    });
+
+    console.log(`✅ Stored ${added} conventions in database`);
+
+    return {
+      processingStatus: "complete",
+      extractedConventions: uniqueConventions,
+    };
+  } catch (error) {
+    // Mark the learning run as failed
+    await store.failLearningRun(runId, String(error));
+    throw error;
+  }
 }
 
 function deduplicateConventions(conventions: Convention[]): Convention[] {
@@ -381,7 +407,24 @@ export function createLearnerGraph() {
 // Learner Agent Entry Point
 // ============================================
 
-export async function runLearner(sources: LearnerState["sources"]) {
+export async function runLearner(
+  sources: LearnerState["sources"],
+  repositoryFullName?: string
+) {
+  // Set repository name in config if provided
+  if (repositoryFullName) {
+    config.repository.fullName = repositoryFullName;
+  }
+
+  // Validate repository name is set
+  if (!config.repository.fullName) {
+    throw new Error(
+      "Repository full name is required. Pass it as parameter or set REPOSITORY_FULL_NAME in .env"
+    );
+  }
+
+  console.log(`\n🧠 Starting Learner for repository: ${config.repository.fullName}`);
+
   const graph = createLearnerGraph();
 
   const result = await graph.invoke({
