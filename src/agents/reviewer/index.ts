@@ -175,3 +175,45 @@ export async function reviewPR(prDiff: PRDiffInput): Promise<ReviewerState> {
 }
 
 export * from "./sub-reviewers/index.js";
+
+import type { OrchestratorState } from "../graph.js";
+
+/**
+ * LangGraph-compatible reviewer node
+ * Adapts OrchestratorState → Reviewer graph → OrchestratorState
+ */
+export async function reviewerAgent(
+  state: OrchestratorState
+): Promise<Partial<OrchestratorState>> {
+  // QUESTION mode: skip reviewer entirely
+  if (state.context === "QUESTION") {
+    return {};
+  }
+
+  // If no PR diff provided, return mock violations (demo-safe)
+ if (!state.prDiff || state.prDiff.files.length === 0) {
+  return {
+  violations: [
+    {
+      id: "v1",
+      type: "error-handling",
+      issue: "Missing error handling for payment service",
+      conventionId: "ERR-03",
+      file: "orderService.ts",
+      line: 142,
+      code: "await paymentService.charge(card)",
+      severity: "error",
+    },
+  ],
+};
+
+}
+
+
+  const result = await reviewPR(state.prDiff);
+
+  return {
+    violations: result.violations,
+  };
+}
+

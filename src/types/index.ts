@@ -3,6 +3,7 @@ import { z } from "zod";
 // ============================================
 // Core Domain Types
 // ============================================
+export type TutorContext = "REVIEW" | "QUESTION";
 
 export const ConventionSchema = z.object({
   id: z.string(),
@@ -241,16 +242,31 @@ export interface AppConfig {
 // Additional Agent Types
 // ============================================
 
-export interface RawViolation {
+export type ViolationSeverity = "error" | "warning" | "suggestion";
+
+export type RawViolation = {
   id: string;
-  type: "naming" | "structure" | "pattern" | "testing";
+  type: string;
+  issue: string;
+  conventionId: string;
   file: string;
   line: number;
-  code: string;
-  issue: string;
-  severity: "error" | "warning" | "suggestion";
-  conventionId?: string;
-}
+  code?: string;
+  severity: ViolationSeverity;
+};
+
+
+export type PRDiffInput = {
+  prNumber: number;
+  title: string;
+  files: Array<{
+    path: string;
+    diff: string;
+  }>;
+  baseBranch: string;
+  headBranch: string;
+};
+
 
 export interface ExplainedFeedback {
   id: string;
@@ -302,13 +318,7 @@ export interface PRFileDiff {
   deletions: number;
 }
 
-export interface PRDiffInput {
-  prNumber: number;
-  title: string;
-  files: PRFileDiff[];
-  baseBranch: string;
-  headBranch: string;
-}
+
 
 // ============================================
 // Type Aliases (for backwards compatibility)

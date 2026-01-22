@@ -63,12 +63,12 @@ export async function reviewNaming(
     return parsed.violations.map((v) => ({
       id: `naming-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       type: "naming" as const,
+      issue: v.issue,
       file: filePath,
       line: v.line,
       code: v.code,
-      issue: v.issue,
       severity: v.severity,
-      conventionId: v.conventionId,
+      conventionId: v.conventionId || "",
     }));
   } catch (error) {
     console.error("Naming reviewer error:", error);

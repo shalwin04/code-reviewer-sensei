@@ -68,12 +68,12 @@ export async function reviewTesting(
     return parsed.violations.map((v) => ({
       id: `testing-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       type: "testing" as const,
+      issue: v.issue,
       file: filePath,
       line: v.line,
       code: v.code,
-      issue: v.issue,
       severity: v.severity,
-      conventionId: v.conventionId,
+      conventionId: v.conventionId || "",
     }));
   } catch (error) {
     console.error("Testing reviewer error:", error);
