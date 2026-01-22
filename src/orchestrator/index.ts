@@ -7,7 +7,7 @@ import {
   formatForConsole,
   formatForGitHub,
 } from "../agents/feedback-controller/index.js";
-import { getKnowledgeStore } from "../knowledge/store.js";
+import { getSupabaseKnowledgeStore } from "../knowledge/supabase-store.js";
 import { config } from "../config/index.js";
 import type {
   PRDiffInput,
@@ -214,11 +214,20 @@ async function learnConventionsNode(
     };
   }
 
+  // Validate repository name
+  if (!config.repository.fullName) {
+    return {
+      status: "error",
+      errors: ["Repository name not configured. Set REPOSITORY_FULL_NAME or use --repo flag."],
+    };
+  }
+
   try {
     const learnerResult = await runLearner(state.learningSources);
 
-    const store = await getKnowledgeStore(config.knowledgeStore.path);
-    const stats = store.getStats();
+    // Get stats from Supabase store
+    const store = await getSupabaseKnowledgeStore(config.repository.fullName);
+    const stats = await store.getStats();
 
     return {
       finalOutput: `Learning complete! Found ${learnerResult.extractedConventions.length} conventions. Total in knowledge store: ${stats.conventions}`,
@@ -297,7 +306,15 @@ export async function orchestrateQuestion(question: string) {
   return result;
 }
 
-export async function orchestrateLearning(sources: LearnerState["sources"]) {
+export async function orchestrateLearning(
+  sources: LearnerState["sources"],
+  repositoryFullName?: string
+) {
+  // Set repository name in config if provided
+  if (repositoryFullName) {
+    config.repository.fullName = repositoryFullName;
+  }
+
   const graph = createOrchestratorGraph();
 
   const result = await graph.invoke({
