@@ -1,44 +1,35 @@
-// Main entry point - exports all public APIs
+import readline from "node:readline/promises";
+import { stdin as input, stdout as output } from "node:process";
+import { runReview } from "./orchestrator/index.js";
 
-// Agents
-export { runLearner, createLearnerGraph } from "./agents/learner/index.js";
-export { reviewPR, createReviewerGraph } from "./agents/reviewer/index.js";
-export {
-  explainFeedback,
-  answerQuestion,
-  createTutorGraph,
-} from "./agents/tutor/index.js";
-export {
-  prepareFeedback,
-  createFeedbackControllerGraph,
-  formatForConsole,
-  formatForGitHub,
-} from "./agents/feedback-controller/index.js";
+const rl = readline.createInterface({ input, output });
 
-// Orchestrator
-export {
-  orchestrateReview,
-  orchestrateQuestion,
-  orchestrateLearning,
-  createOrchestratorGraph,
-} from "./orchestrator/index.js";
+// 1️⃣ Run REVIEW first
+console.log("\n🔍 Running review...\n");
 
-// Knowledge Store
-export { getKnowledgeStore, KnowledgeStore } from "./knowledge/store.js";
+let state = await runReview({
+  context: "REVIEW",
+});
 
-// GitHub Integration
-export {
-  fetchPRDiff,
-  postPRReview,
-  postPRComments,
-  getPRComments,
-} from "./integrations/github.js";
+console.log(JSON.stringify(state.explainedFeedback, null, 2));
 
-// Web Server
-export { startServer, app } from "./web/server.js";
+// 2️⃣ Enter question loop
+while (true) {
+  const question = await rl.question(
+    "\n❓ Ask a question (or type 'exit'): "
+  );
 
-// Config
-export { config, loadConfig } from "./config/index.js";
+  if (question.toLowerCase() === "exit") {
+    rl.close();
+    process.exit(0);
+  }
 
-// Types
-export * from "./types/index.js";
+  state = await runReview({
+    context: "QUESTION",
+    question,
+    state, // 👈 reuse everything from review
+  });
+
+  console.log("\n🧠 Answer:\n");
+  console.log(state.explainedFeedback.at(-1)?.explanation);
+}

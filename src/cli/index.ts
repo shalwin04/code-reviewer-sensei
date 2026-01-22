@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
+import readline from "node:readline/promises";
+import { stdin as input, stdout as output } from "node:process";
 import { Command } from "commander";
+import { runReview } from "../orchestrator/index.js";
 import chalk from "chalk";
 import ora from "ora";
 import inquirer from "inquirer";
@@ -21,9 +24,17 @@ const program = new Command();
 
 program
   .name("ai-tutor")
-  .description("Team-Aware AI Tutor + PR Reviewer")
+  .description("Team-aware AI Tutor with review + follow-up questions")
   .version("1.0.0");
 
+/**
+ * SESSION COMMAND
+ * Runs review first, then allows interactive questions
+ */
+program
+  .command("session")
+  .description("Run a review and ask follow-up questions")
+  .option("-p, --pr <number>", "PR number (optional)")
 // ============================================
 // Review Command
 // ============================================
@@ -291,30 +302,18 @@ program
   .alias("i")
   .description("Start interactive mode")
   .action(async () => {
-    console.log(chalk.cyan("\n🤖 AI Tutor Interactive Mode"));
-    console.log(chalk.gray("Type 'exit' to quit, 'help' for commands\n"));
+    const rl = readline.createInterface({ input, output });
 
-    while (true) {
-      const { action } = await inquirer.prompt([
-        {
-          type: "list",
-          name: "action",
-          message: "What would you like to do?",
-          choices: [
-            { name: "📝 Review code", value: "review" },
-            { name: "📚 Learn from codebase", value: "learn" },
-            { name: "❓ Ask a question", value: "ask" },
-            { name: "📊 View knowledge stats", value: "stats" },
-            { name: "🚪 Exit", value: "exit" },
-          ],
-        },
-      ]);
+    console.log("\n🔍 Running review...\n");
 
-      if (action === "exit") {
-        console.log(chalk.cyan("\nGoodbye! 👋\n"));
-        break;
-      }
+    // 1️⃣ Run REVIEW (learner + reviewer + tutor)
+    let state = await runReview({ context: "REVIEW" });
 
+    // Show review feedback
+    console.log("📝 Review Feedback:\n");
+    console.log(
+      JSON.stringify(state.explainedFeedback, null, 2)
+    );
       if (action === "stats") {
         // Ask for repository name
         const { repoName } = await inquirer.prompt([
@@ -347,65 +346,42 @@ program
         continue;
       }
 
-      if (action === "ask") {
-        const { question } = await inquirer.prompt([
-          {
-            type: "input",
-            name: "question",
-            message: "Your question:",
-          },
-        ]);
+    // 2️⃣ Question loop
+    while (true) {
+      const question = await rl.question(
+        "\n❓ Ask a question (type 'exit' to quit): "
+      );
 
-        if (question) {
-          const spinner = ora("Thinking...").start();
-          try {
-            const result = await orchestrateQuestion(question);
-            spinner.succeed("Answer:");
-            console.log(chalk.white(`\n${result.finalOutput}\n`));
-          } catch (error) {
-            spinner.fail("Failed");
-            console.error(chalk.red(error));
-          }
-        }
-        continue;
+      if (question.trim().toLowerCase() === "exit") {
+        rl.close();
+        process.exit(0);
       }
 
-      if (action === "review") {
-        const { reviewType } = await inquirer.prompt([
-          {
-            type: "list",
-            name: "reviewType",
-            message: "What to review?",
-            choices: [
-              { name: "GitHub PR", value: "pr" },
-              { name: "Local files", value: "files" },
-              { name: "Diff file", value: "diff" },
-            ],
-          },
-        ]);
+      // 3️⃣ Ask QUESTION using SAME STATE
+      state = await runReview({
+        context: "QUESTION",
+        question,
+        state, // ← reuse learned + reviewed state
+      });
 
-        console.log(
-          chalk.gray(
-            `\nUse 'ai-tutor review' with appropriate options for ${reviewType} review\n`
-          )
-        );
-        continue;
-      }
+      const answer =
+        state.explainedFeedback.at(-1)?.explanation;
 
-      if (action === "learn") {
-        console.log(
-          chalk.gray("\nUse 'ai-tutor learn' with appropriate options\n")
-        );
-        continue;
-      }
+      console.log("\n🧠 Answer:\n");
+      console.log(answer ?? "No answer generated.");
     }
   });
 
-// ============================================
-// Status Command
-// ============================================
-
+/**
+ * REVIEW COMMAND
+ * One-shot review (CI / GitHub usage)
+ */
 program
+  .command("review")
+  .description("Run a one-time review (no questions)")
+  .action(async () => {
+    const state = await runReview({ context: "REVIEW" });
+    console.log(JSON.stringify(state, null, 2));
   .command("status")
   .description("Show knowledge store status")
   .option("-r, --repo <owner/repo>", "Repository full name (e.g., owner/repo)")
@@ -452,59 +428,5 @@ program
       process.exit(1);
     }
   });
-
-// ============================================
-// Helper Functions
-// ============================================
-
-async function scanCodebase(dirPath: string): Promise<string[]> {
-  const results: string[] = [];
-  const extensions = [".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs"];
-
-  async function scan(dir: string) {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-
-      if (entry.isDirectory()) {
-        if (!entry.name.startsWith(".") && entry.name !== "node_modules") {
-          await scan(fullPath);
-        }
-      } else if (entry.isFile()) {
-        const ext = path.extname(entry.name);
-        if (extensions.includes(ext)) {
-          const content = await fs.readFile(fullPath, "utf-8");
-          // Only include files under 10KB to avoid overwhelming the model
-          if (content.length < 10000) {
-            results.push(content);
-          }
-        }
-      }
-    }
-  }
-
-  await scan(dirPath);
-  return results.slice(0, 50); // Limit to 50 files
-}
-
-async function readDirectory(dirPath: string): Promise<string[]> {
-  const results: string[] = [];
-  const entries = await fs.readdir(dirPath, { withFileTypes: true });
-
-  for (const entry of entries) {
-    if (entry.isFile() && entry.name.endsWith(".md")) {
-      const fullPath = path.join(dirPath, entry.name);
-      const content = await fs.readFile(fullPath, "utf-8");
-      results.push(content);
-    }
-  }
-
-  return results;
-}
-
-// ============================================
-// Run CLI
-// ============================================
 
 program.parse();

@@ -148,87 +148,31 @@ async function scanSources(
 ): Promise<Partial<LearnerAgentState>> {
   console.log("📚 Learner Agent: Scanning sources...");
 
+export async function learnerAgent(): Promise<Partial<OrchestratorState>> {
   return {
-    processingStatus: "scanning",
-  };
-}
-
-async function extractFromCodebase(
-  state: LearnerAgentState
-): Promise<Partial<LearnerAgentState>> {
-  const llm = createLLM(config.agents.learner);
-  const conventions: Convention[] = [];
-
-  for (const code of state.sources.codebase) {
-    try {
-      const prompt = await CODEBASE_ANALYSIS_PROMPT.format({
-        code,
-        format_instructions: conventionParser.getFormatInstructions(),
-      });
-
-      const response = await llm.invoke(prompt);
-      const parsed = await conventionParser.parse(
-        response.content as string
-      );
-
-      for (const conv of parsed.conventions) {
-        conventions.push({
-          id: `conv-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-          ...conv,
-          source: {
-            type: "codebase",
-            reference: "codebase-scan",
-            timestamp: new Date().toISOString(),
+    teamKnowledge: [
+      {
+        id: "ERR-03",
+        category: "error-handling",
+        rule: "External service calls must handle failures",
+        description:
+          "Unhandled failures caused a production outage when the payment service went down.",
+        examples: [
+          {
+            explanation: "External service calls should never be made without protection.",
+            good: "Wrap calls in try/catch with logging or use a circuit breaker.",
+            bad: "Calling external services directly without handling failures.",
           },
-        });
-      }
-    } catch (error) {
-      console.error("Error extracting from codebase:", error);
-    }
-  }
-
-  return {
-    extractedConventions: conventions,
-    processingStatus: "extracting",
-  };
-}
-
-async function extractFromADRs(
-  state: LearnerAgentState
-): Promise<Partial<LearnerAgentState>> {
-  const llm = createLLM(config.agents.learner);
-  const conventions: Convention[] = [];
-
-  for (const adr of state.sources.adrs) {
-    try {
-      const prompt = await ADR_ANALYSIS_PROMPT.format({
-        content: adr,
-        format_instructions: conventionParser.getFormatInstructions(),
-      });
-
-      const response = await llm.invoke(prompt);
-      const parsed = await conventionParser.parse(
-        response.content as string
-      );
-
-      for (const conv of parsed.conventions) {
-        conventions.push({
-          id: `conv-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-          ...conv,
-          source: {
-            type: "adr",
-            reference: "adr-analysis",
-            timestamp: new Date().toISOString(),
-          },
-        });
-      }
-    } catch (error) {
-      console.error("Error extracting from ADR:", error);
-    }
-  }
-
-  return {
-    extractedConventions: conventions,
+        ],
+        source: {
+          type: "incident",
+          reference: "INC-429",
+          timestamp: new Date().toISOString(),
+        },
+        confidence: 0.9,
+        tags: ["reliability", "payments", "downtime"],
+      },
+    ],
   };
 }
 

@@ -2,18 +2,14 @@ import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import crypto from "crypto";
 import { config } from "../config/index.js";
-import {
-  orchestrateReview,
-  orchestrateQuestion,
-  formatForGitHub,
-} from "../orchestrator/index.js";
+import { runReview } from "../orchestrator/index.js";
+import { formatForGitHub } from "../agents/feedback-controller/index.js";
 import {
   fetchPRDiff,
   postPRReview,
   isPRWebhookPayload,
 } from "../integrations/github.js";
 import { getKnowledgeStore } from "../knowledge/store.js";
-import type { FeedbackControllerStateUpdated } from "../types/index.js";
 
 const app = express();
 
@@ -67,8 +63,8 @@ app.get("/health", (_req: Request, res: Response) => {
 app.get("/api/stats", async (_req: Request, res: Response) => {
   try {
     const store = await getKnowledgeStore(config.knowledgeStore.path);
-    const stats = store.getStats();
-    res.json(stats);
+    const stats = store.getAllConventions().length;
+    res.json({ conventions: stats });
   } catch (error) {
     res.status(500).json({ error: "Failed to get stats" });
   }
@@ -111,8 +107,8 @@ app.post("/api/ask", async (req: Request, res: Response) => {
       return;
     }
 
-    const result = await orchestrateQuestion(question);
-    res.json({ answer: result.finalOutput });
+    const result = await runReview({ context: "QUESTION", question });
+    res.json({ answer: result });
   } catch (error) {
     res.status(500).json({ error: "Failed to answer question" });
   }
@@ -129,16 +125,9 @@ app.post("/api/review", async (req: Request, res: Response) => {
     }
 
     const prDiff = await fetchPRDiff(repo, prNumber);
-    const result = await orchestrateReview(prDiff);
+    const result = await runReview({ context: "REVIEW", state: { prDiff } });
 
-    if (result.status === "error") {
-      res.status(500).json({ errors: result.errors });
-      return;
-    }
-
-    const formatted = formatForGitHub(
-      result.finalOutput as FeedbackControllerStateUpdated
-    );
+    const formatted = formatForGitHub(result as any);
     res.json(formatted);
   } catch (error) {
     res.status(500).json({ error: "Failed to review PR" });
@@ -183,18 +172,16 @@ app.post("/webhook/github", verifyGitHubWebhook, async (req: Request, res: Respo
       payload.number
     );
 
-    const result = await orchestrateReview(prDiff);
+    const result = await runReview({ context: "REVIEW", state: { prDiff } });
 
-    if (result.status === "complete" && result.finalOutput) {
-      const formatted = formatForGitHub(
-        result.finalOutput as FeedbackControllerStateUpdated
-      );
+    if (result) {
+      const formatted = formatForGitHub(result as any);
 
       await postPRReview(
         payload.repository.full_name,
         payload.number,
         formatted.summary,
-        formatted.comments.map((c) => ({
+        formatted.comments.map((c: any) => ({
           id: `gh-${Date.now()}`,
           file: c.path,
           line: c.line,
