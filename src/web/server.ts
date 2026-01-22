@@ -2,14 +2,17 @@ import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import crypto from "crypto";
 import { config } from "../config/index.js";
-import { runReview } from "../orchestrator/index.js";
-import { formatForGitHub } from "../agents/feedback-controller/index.js";
+import {
+  orchestrateReview,
+  orchestrateQuestion,
+  formatForGitHub,
+} from "../orchestrator/index.js";
 import {
   fetchPRDiff,
   postPRReview,
   isPRWebhookPayload,
 } from "../integrations/github.js";
-import { getKnowledgeStore } from "../knowledge/store.js";
+import { getSupabaseKnowledgeStore } from "../knowledge/supabase-store.js";
 
 const app = express();
 
@@ -60,21 +63,33 @@ app.get("/health", (_req: Request, res: Response) => {
 });
 
 // Knowledge store stats
-app.get("/api/stats", async (_req: Request, res: Response) => {
+app.get("/api/stats", async (req: Request, res: Response) => {
   try {
-    const store = await getKnowledgeStore(config.knowledgeStore.path);
-    const stats = store.getAllConventions().length;
-    res.json({ conventions: stats });
+    const repo = req.query.repo as string;
+    if (!repo) {
+      res.status(400).json({ error: "repo query parameter is required" });
+      return;
+    }
+
+    const store = await getSupabaseKnowledgeStore(repo);
+    const stats = await store.getStats();
+    res.json(stats);
   } catch (error) {
     res.status(500).json({ error: "Failed to get stats" });
   }
 });
 
 // Get all conventions
-app.get("/api/conventions", async (_req: Request, res: Response) => {
+app.get("/api/conventions", async (req: Request, res: Response) => {
   try {
-    const store = await getKnowledgeStore(config.knowledgeStore.path);
-    const conventions = store.getAllConventions();
+    const repo = req.query.repo as string;
+    if (!repo) {
+      res.status(400).json({ error: "repo query parameter is required" });
+      return;
+    }
+
+    const store = await getSupabaseKnowledgeStore(repo);
+    const conventions = await store.getAllConventions();
     res.json(conventions);
   } catch (error) {
     res.status(500).json({ error: "Failed to get conventions" });
@@ -84,14 +99,20 @@ app.get("/api/conventions", async (_req: Request, res: Response) => {
 // Search conventions
 app.get("/api/conventions/search", async (req: Request, res: Response) => {
   try {
+    const repo = req.query.repo as string;
     const query = req.query.q as string;
+
+    if (!repo) {
+      res.status(400).json({ error: "repo query parameter is required" });
+      return;
+    }
     if (!query) {
       res.status(400).json({ error: "Query parameter 'q' is required" });
       return;
     }
 
-    const store = await getKnowledgeStore(config.knowledgeStore.path);
-    const results = store.searchConventions(query);
+    const store = await getSupabaseKnowledgeStore(repo);
+    const results = await store.searchConventions(query);
     res.json(results);
   } catch (error) {
     res.status(500).json({ error: "Failed to search conventions" });
@@ -101,14 +122,19 @@ app.get("/api/conventions/search", async (req: Request, res: Response) => {
 // Ask a question
 app.post("/api/ask", async (req: Request, res: Response) => {
   try {
-    const { question } = req.body;
+    const { question, repo } = req.body;
     if (!question) {
       res.status(400).json({ error: "Question is required" });
       return;
     }
 
-    const result = await runReview({ context: "QUESTION", question });
-    res.json({ answer: result });
+    // Set repository context if provided
+    if (repo) {
+      config.repository.fullName = repo;
+    }
+
+    const result = await orchestrateQuestion(question);
+    res.json({ answer: result.finalOutput });
   } catch (error) {
     res.status(500).json({ error: "Failed to answer question" });
   }
@@ -124,10 +150,18 @@ app.post("/api/review", async (req: Request, res: Response) => {
       return;
     }
 
-    const prDiff = await fetchPRDiff(repo, prNumber);
-    const result = await runReview({ context: "REVIEW", state: { prDiff } });
+    // Set repository context
+    config.repository.fullName = repo;
 
-    const formatted = formatForGitHub(result as any);
+    const prDiff = await fetchPRDiff(repo, prNumber);
+    const result = await orchestrateReview(prDiff);
+
+    if (result.status === "error") {
+      res.status(500).json({ error: result.errors.join(", ") });
+      return;
+    }
+
+    const formatted = formatForGitHub(result.finalOutput as any);
     res.json(formatted);
   } catch (error) {
     res.status(500).json({ error: "Failed to review PR" });
@@ -167,15 +201,18 @@ app.post("/webhook/github", verifyGitHubWebhook, async (req: Request, res: Respo
 
   // Process asynchronously
   try {
+    // Set repository context
+    config.repository.fullName = payload.repository.full_name;
+
     const prDiff = await fetchPRDiff(
       payload.repository.full_name,
       payload.number
     );
 
-    const result = await runReview({ context: "REVIEW", state: { prDiff } });
+    const result = await orchestrateReview(prDiff);
 
-    if (result) {
-      const formatted = formatForGitHub(result as any);
+    if (result.status === "complete" && result.finalOutput) {
+      const formatted = formatForGitHub(result.finalOutput as any);
 
       await postPRReview(
         payload.repository.full_name,
@@ -217,13 +254,13 @@ export function startServer() {
   app.listen(port, host, () => {
     console.log(`\n🚀 AI Tutor Server running at http://${host}:${port}`);
     console.log(`\nEndpoints:`);
-    console.log(`  GET  /health              - Health check`);
-    console.log(`  GET  /api/stats           - Knowledge store stats`);
-    console.log(`  GET  /api/conventions     - List all conventions`);
-    console.log(`  GET  /api/conventions/search?q=... - Search conventions`);
-    console.log(`  POST /api/ask             - Ask a question`);
-    console.log(`  POST /api/review          - Trigger manual review`);
-    console.log(`  POST /webhook/github      - GitHub webhook endpoint\n`);
+    console.log(`  GET  /health                      - Health check`);
+    console.log(`  GET  /api/stats?repo=owner/repo   - Knowledge store stats`);
+    console.log(`  GET  /api/conventions?repo=...    - List all conventions`);
+    console.log(`  GET  /api/conventions/search?repo=...&q=... - Search conventions`);
+    console.log(`  POST /api/ask                     - Ask a question`);
+    console.log(`  POST /api/review                  - Trigger manual review`);
+    console.log(`  POST /webhook/github              - GitHub webhook endpoint\n`);
   });
 
   return app;

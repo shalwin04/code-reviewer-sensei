@@ -1,35 +1,29 @@
-import readline from "node:readline/promises";
-import { stdin as input, stdout as output } from "node:process";
-import { runReview } from "./orchestrator/index.js";
+#!/usr/bin/env node
 
-const rl = readline.createInterface({ input, output });
+/**
+ * AI Code Reviewer - Main Entry Point
+ *
+ * This is the programmatic entry point for the AI Code Reviewer.
+ * For CLI usage, see src/cli/index.ts
+ */
 
-// 1️⃣ Run REVIEW first
-console.log("\n🔍 Running review...\n");
+export {
+  orchestrateReview,
+  orchestrateQuestion,
+  orchestrateLearning,
+  formatForConsole,
+  formatForGitHub,
+} from "./orchestrator/index.js";
 
-let state = await runReview({
-  context: "REVIEW",
-});
+export { getSupabaseKnowledgeStore } from "./knowledge/supabase-store.js";
 
-console.log(JSON.stringify(state.explainedFeedback, null, 2));
+export { config } from "./config/index.js";
 
-// 2️⃣ Enter question loop
-while (true) {
-  const question = await rl.question(
-    "\n❓ Ask a question (or type 'exit'): "
-  );
-
-  if (question.toLowerCase() === "exit") {
-    rl.close();
-    process.exit(0);
-  }
-
-  state = await runReview({
-    context: "QUESTION",
-    question,
-    state, // 👈 reuse everything from review
-  });
-
-  console.log("\n🧠 Answer:\n");
-  console.log(state.explainedFeedback.at(-1)?.explanation);
-}
+export type {
+  Convention,
+  RawViolation,
+  ExplainedFeedback,
+  PRDiffInput,
+  PRFileDiff,
+  FormattedComment,
+} from "./types/index.js";

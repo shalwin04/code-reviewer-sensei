@@ -144,35 +144,120 @@ Incident Reports:
 // ============================================
 
 async function scanSources(
-  _state: LearnerAgentState
+  state: LearnerAgentState
 ): Promise<Partial<LearnerAgentState>> {
   console.log("📚 Learner Agent: Scanning sources...");
 
-export async function learnerAgent(): Promise<Partial<OrchestratorState>> {
+  const sourceCounts = {
+    codebase: state.sources.codebase.length,
+    adrs: state.sources.adrs.length,
+    prReviews: state.sources.prReviews.length,
+    incidents: state.sources.incidents.length,
+  };
+
+  console.log(`   Codebase files: ${sourceCounts.codebase}`);
+  console.log(`   ADR files: ${sourceCounts.adrs}`);
+  console.log(`   PR Reviews: ${sourceCounts.prReviews}`);
+  console.log(`   Incident reports: ${sourceCounts.incidents}`);
+
   return {
-    teamKnowledge: [
-      {
-        id: "ERR-03",
-        category: "error-handling",
-        rule: "External service calls must handle failures",
-        description:
-          "Unhandled failures caused a production outage when the payment service went down.",
-        examples: [
-          {
-            explanation: "External service calls should never be made without protection.",
-            good: "Wrap calls in try/catch with logging or use a circuit breaker.",
-            bad: "Calling external services directly without handling failures.",
+    processingStatus: "extracting",
+    currentSource: "codebase",
+  };
+}
+
+async function extractFromCodebase(
+  state: LearnerAgentState
+): Promise<Partial<LearnerAgentState>> {
+  const llm = createLLM(config.agents.learner);
+  const conventions: Convention[] = [];
+
+  if (state.sources.codebase.length > 0) {
+    console.log("🔍 Learner Agent: Analyzing codebase...");
+
+    // Process in batches to avoid token limits
+    const batchSize = 5;
+    for (let i = 0; i < state.sources.codebase.length; i += batchSize) {
+      const batch = state.sources.codebase.slice(i, i + batchSize);
+      console.log(`   Processing batch ${Math.floor(i / batchSize) + 1}...`);
+
+      try {
+        const prompt = await CODEBASE_ANALYSIS_PROMPT.format({
+          code: batch.join("\n\n---\n\n"),
+          format_instructions: conventionParser.getFormatInstructions(),
+        });
+
+        const response = await llm.invoke(prompt);
+        const parsed = await conventionParser.parse(
+          response.content as string
+        );
+
+        for (const conv of parsed.conventions) {
+          conventions.push({
+            id: `conv-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            ...conv,
+            source: {
+              type: "codebase",
+              reference: "codebase-analysis",
+              timestamp: new Date().toISOString(),
+            },
+          });
+        }
+      } catch (error) {
+        console.error(`   Error processing batch: ${error}`);
+      }
+    }
+
+    console.log(`   Extracted ${conventions.length} conventions from codebase`);
+  }
+
+  return {
+    extractedConventions: conventions,
+    currentSource: "adrs",
+  };
+}
+
+async function extractFromADRs(
+  state: LearnerAgentState
+): Promise<Partial<LearnerAgentState>> {
+  const llm = createLLM(config.agents.learner);
+  const conventions: Convention[] = [];
+
+  if (state.sources.adrs.length > 0) {
+    console.log("📖 Learner Agent: Analyzing ADRs...");
+
+    try {
+      const prompt = await ADR_ANALYSIS_PROMPT.format({
+        content: state.sources.adrs.join("\n\n---\n\n"),
+        format_instructions: conventionParser.getFormatInstructions(),
+      });
+
+      const response = await llm.invoke(prompt);
+      const parsed = await conventionParser.parse(
+        response.content as string
+      );
+
+      for (const conv of parsed.conventions) {
+        conventions.push({
+          id: `conv-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          ...conv,
+          source: {
+            type: "adr",
+            reference: "adr-analysis",
+            timestamp: new Date().toISOString(),
           },
-        ],
-        source: {
-          type: "incident",
-          reference: "INC-429",
-          timestamp: new Date().toISOString(),
-        },
-        confidence: 0.9,
-        tags: ["reliability", "payments", "downtime"],
-      },
-    ],
+        });
+      }
+
+      console.log(`   Extracted ${conventions.length} conventions from ADRs`);
+    } catch (error) {
+      console.error(`   Error extracting from ADRs: ${error}`);
+    }
+  }
+
+  return {
+    extractedConventions: conventions,
+    currentSource: "pr-reviews",
   };
 }
 
@@ -183,6 +268,8 @@ async function extractFromPRReviews(
   const conventions: Convention[] = [];
 
   if (state.sources.prReviews.length > 0) {
+    console.log("💬 Learner Agent: Analyzing PR reviews...");
+
     try {
       const prompt = await PR_REVIEW_ANALYSIS_PROMPT.format({
         reviews: state.sources.prReviews.join("\n\n---\n\n"),
@@ -205,6 +292,8 @@ async function extractFromPRReviews(
           },
         });
       }
+
+      console.log(`   Extracted ${conventions.length} conventions from PR reviews`);
     } catch (error) {
       console.error("Error extracting from PR reviews:", error);
     }
@@ -212,6 +301,7 @@ async function extractFromPRReviews(
 
   return {
     extractedConventions: conventions,
+    currentSource: "incidents",
   };
 }
 
@@ -222,6 +312,8 @@ async function extractFromIncidents(
   const conventions: Convention[] = [];
 
   if (state.sources.incidents.length > 0) {
+    console.log("🚨 Learner Agent: Analyzing incident reports...");
+
     try {
       const prompt = await INCIDENT_ANALYSIS_PROMPT.format({
         incidents: state.sources.incidents.join("\n\n---\n\n"),
@@ -244,6 +336,8 @@ async function extractFromIncidents(
           },
         });
       }
+
+      console.log(`   Extracted ${conventions.length} conventions from incidents`);
     } catch (error) {
       console.error("Error extracting from incidents:", error);
     }
@@ -251,6 +345,7 @@ async function extractFromIncidents(
 
   return {
     extractedConventions: conventions,
+    currentSource: "storing",
   };
 }
 
