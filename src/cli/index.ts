@@ -12,9 +12,9 @@ import {
   orchestrateLearning,
   formatForConsole,
 } from "../orchestrator/index.js";
-import { getKnowledgeStore } from "../knowledge/store.js";
+import { getSupabaseKnowledgeStore } from "../knowledge/supabase-store.js";
 import { config } from "../config/index.js";
-import { fetchPRDiff } from "../integrations/github.js";
+import { fetchPRDiff, fetchRepoCodeFiles, fetchRepoADRs } from "../integrations/github.js";
 import type { FeedbackControllerStateUpdated } from "../types/index.js";
 
 const program = new Command();
@@ -122,14 +122,26 @@ program
 program
   .command("learn")
   .description("Learn conventions from your codebase")
-  .option("-c, --codebase <path>", "Path to codebase directory")
-  .option("-a, --adrs <path>", "Path to ADR directory")
+  .requiredOption("-r, --repo <owner/repo>", "Repository full name (e.g., owner/repo)")
+  .option("--from-github", "Fetch code directly from GitHub (no local clone needed)")
+  .option("-c, --codebase <path>", "Path to local codebase directory")
+  .option("-a, --adrs <path>", "Path to local ADR directory")
   .option("--pr-reviews <path>", "Path to PR review history file")
   .option("--incidents <path>", "Path to incident reports file")
+  .option("-b, --branch <branch>", "GitHub branch to fetch from (default: main branch)")
   .action(async (options) => {
     const spinner = ora("Gathering learning sources...").start();
 
     try {
+      // Validate repository name
+      if (!options.repo || !options.repo.includes("/")) {
+        spinner.fail("Invalid repository name");
+        console.log(chalk.yellow("\nRepository must be in format: owner/repo"));
+        process.exit(1);
+      }
+
+      console.log(chalk.cyan(`\nRepository: ${options.repo}`));
+
       const sources = {
         codebase: [] as string[],
         adrs: [] as string[],
@@ -137,28 +149,54 @@ program
         incidents: [] as string[],
       };
 
-      if (options.codebase) {
-        spinner.text = "Scanning codebase...";
-        sources.codebase = await scanCodebase(options.codebase);
-        console.log(chalk.gray(`\n  Found ${sources.codebase.length} code files`));
-      }
+      // Fetch from GitHub if --from-github flag is set
+      if (options.fromGithub) {
+        spinner.text = "Fetching code from GitHub...";
+        console.log(chalk.gray(`\n  Fetching from GitHub: ${options.repo}`));
 
-      if (options.adrs) {
-        spinner.text = "Reading ADRs...";
-        sources.adrs = await readDirectory(options.adrs);
-        console.log(chalk.gray(`  Found ${sources.adrs.length} ADR files`));
-      }
+        try {
+          // Fetch code files
+          const codeFiles = await fetchRepoCodeFiles(options.repo, options.branch);
+          sources.codebase = codeFiles.map((f) => `// File: ${f.path}\n${f.content}`);
+          console.log(chalk.gray(`  Fetched ${sources.codebase.length} code files`));
 
-      if (options.prReviews) {
-        spinner.text = "Reading PR reviews...";
-        const content = await fs.readFile(options.prReviews, "utf-8");
-        sources.prReviews = [content];
-      }
+          // Fetch ADRs if present
+          const adrFiles = await fetchRepoADRs(options.repo, options.branch);
+          sources.adrs = adrFiles.map((f) => `# File: ${f.path}\n${f.content}`);
+          if (sources.adrs.length > 0) {
+            console.log(chalk.gray(`  Fetched ${sources.adrs.length} ADR files`));
+          }
+        } catch (error) {
+          spinner.fail("Failed to fetch from GitHub");
+          console.error(chalk.red(`\nError: ${error}`));
+          console.log(chalk.yellow("\nMake sure GITHUB_TOKEN is set in your .env file"));
+          process.exit(1);
+        }
+      } else {
+        // Local file sources
+        if (options.codebase) {
+          spinner.text = "Scanning codebase...";
+          sources.codebase = await scanCodebase(options.codebase);
+          console.log(chalk.gray(`  Found ${sources.codebase.length} code files`));
+        }
 
-      if (options.incidents) {
-        spinner.text = "Reading incident reports...";
-        const content = await fs.readFile(options.incidents, "utf-8");
-        sources.incidents = [content];
+        if (options.adrs) {
+          spinner.text = "Reading ADRs...";
+          sources.adrs = await readDirectory(options.adrs);
+          console.log(chalk.gray(`  Found ${sources.adrs.length} ADR files`));
+        }
+
+        if (options.prReviews) {
+          spinner.text = "Reading PR reviews...";
+          const content = await fs.readFile(options.prReviews, "utf-8");
+          sources.prReviews = [content];
+        }
+
+        if (options.incidents) {
+          spinner.text = "Reading incident reports...";
+          const content = await fs.readFile(options.incidents, "utf-8");
+          sources.incidents = [content];
+        }
       }
 
       if (
@@ -167,28 +205,36 @@ program
         sources.prReviews.length === 0 &&
         sources.incidents.length === 0
       ) {
-        spinner.fail("No learning sources provided");
+        spinner.fail("No learning sources found");
         console.log(
           chalk.yellow(
-            "\nUse --codebase, --adrs, --pr-reviews, or --incidents to specify sources"
+            "\nUse --from-github to fetch from GitHub, or --codebase for local files"
           )
         );
         process.exit(1);
       }
 
       spinner.text = "Learning conventions...";
-      const result = await orchestrateLearning(sources);
+      const result = await orchestrateLearning(sources, options.repo);
 
       spinner.succeed("Learning complete!");
       console.log(chalk.green(`\n${result.finalOutput}`));
 
-      // Show stats
-      const store = await getKnowledgeStore(config.knowledgeStore.path);
-      const stats = store.getStats();
+      // Show stats from Supabase
+      const store = await getSupabaseKnowledgeStore(options.repo);
+      const stats = await store.getStats();
       console.log(chalk.cyan("\nKnowledge Store Stats:"));
-      console.log(chalk.gray(`  Conventions: ${stats.conventions}`));
-      console.log(chalk.gray(`  Entries: ${stats.entries}`));
-      console.log(chalk.gray(`  Examples: ${stats.examples}`));
+      console.log(chalk.gray(`  Repository: ${options.repo}`));
+      console.log(chalk.gray(`  Total Conventions: ${stats.conventions}`));
+      if (Object.keys(stats.byCategory).length > 0) {
+        console.log(chalk.gray(`  By Category:`));
+        for (const [category, count] of Object.entries(stats.byCategory)) {
+          console.log(chalk.gray(`    - ${category}: ${count}`));
+        }
+      }
+      if (stats.lastLearned) {
+        console.log(chalk.gray(`  Last Learned: ${new Date(stats.lastLearned).toLocaleString()}`));
+      }
     } catch (error) {
       spinner.fail("Learning failed");
       console.error(chalk.red(error));
@@ -201,9 +247,27 @@ program
 // ============================================
 
 program
-  .command("ask <question>")
+  .command("ask [question...]")
   .description("Ask a question about team conventions")
-  .action(async (question) => {
+  .action(async (questionParts: string[]) => {
+    let question: string;
+
+    // If question provided as arguments, join them
+    if (questionParts && questionParts.length > 0) {
+      question = questionParts.join(" ");
+    } else {
+      // Interactive mode - prompt for question
+      const { userQuestion } = await inquirer.prompt([
+        {
+          type: "input",
+          name: "userQuestion",
+          message: "What would you like to ask?",
+          validate: (input: string) => input.trim().length > 0 || "Please enter a question",
+        },
+      ]);
+      question = userQuestion;
+    }
+
     const spinner = ora("Thinking...").start();
 
     try {
@@ -252,12 +316,34 @@ program
       }
 
       if (action === "stats") {
-        const store = await getKnowledgeStore(config.knowledgeStore.path);
-        const stats = store.getStats();
-        console.log(chalk.cyan("\nKnowledge Store Stats:"));
-        console.log(chalk.gray(`  Conventions: ${stats.conventions}`));
-        console.log(chalk.gray(`  Entries: ${stats.entries}`));
-        console.log(chalk.gray(`  Examples: ${stats.examples}\n`));
+        // Ask for repository name
+        const { repoName } = await inquirer.prompt([
+          {
+            type: "input",
+            name: "repoName",
+            message: "Repository (owner/repo):",
+            validate: (input: string) => input.includes("/") || "Must be in format owner/repo",
+          },
+        ]);
+
+        try {
+          const store = await getSupabaseKnowledgeStore(repoName);
+          const stats = await store.getStats();
+          console.log(chalk.cyan("\nKnowledge Store Stats:"));
+          console.log(chalk.gray(`  Repository: ${repoName}`));
+          console.log(chalk.gray(`  Total Conventions: ${stats.conventions}`));
+          if (Object.keys(stats.byCategory).length > 0) {
+            for (const [category, count] of Object.entries(stats.byCategory)) {
+              console.log(chalk.gray(`    - ${category}: ${count}`));
+            }
+          }
+          if (stats.lastLearned) {
+            console.log(chalk.gray(`  Last Learned: ${new Date(stats.lastLearned).toLocaleString()}`));
+          }
+        } catch (error) {
+          console.error(chalk.red(`Failed to get stats: ${error}`));
+        }
+        console.log();
         continue;
       }
 
@@ -322,25 +408,41 @@ program
 program
   .command("status")
   .description("Show knowledge store status")
-  .action(async () => {
+  .option("-r, --repo <owner/repo>", "Repository full name (e.g., owner/repo)")
+  .action(async (options) => {
     try {
-      const store = await getKnowledgeStore(config.knowledgeStore.path);
-      const stats = store.getStats();
-
       console.log(chalk.cyan("\n📊 AI Tutor Status\n"));
-      console.log(chalk.white("Knowledge Store:"));
-      console.log(chalk.gray(`  Path: ${config.knowledgeStore.path}`));
-      console.log(chalk.gray(`  Conventions: ${stats.conventions}`));
-      console.log(chalk.gray(`  Entries: ${stats.entries}`));
-      console.log(chalk.gray(`  Examples: ${stats.examples}`));
+
+      // Show Supabase status if repo is provided
+      if (options.repo) {
+        const store = await getSupabaseKnowledgeStore(options.repo);
+        const stats = await store.getStats();
+        const repoInfo = await store.getRepositoryInfo();
+
+        console.log(chalk.white("Knowledge Store (Supabase):"));
+        console.log(chalk.gray(`  Repository: ${options.repo}`));
+        console.log(chalk.gray(`  Total Conventions: ${stats.conventions}`));
+        if (Object.keys(stats.byCategory).length > 0) {
+          console.log(chalk.gray(`  By Category:`));
+          for (const [category, count] of Object.entries(stats.byCategory)) {
+            console.log(chalk.gray(`    - ${category}: ${count}`));
+          }
+        }
+        if (stats.lastLearned) {
+          console.log(chalk.gray(`  Last Learned: ${new Date(stats.lastLearned).toLocaleString()}`));
+        }
+        if (repoInfo?.primary_language) {
+          console.log(chalk.gray(`  Primary Language: ${repoInfo.primary_language}`));
+        }
+      } else {
+        console.log(chalk.yellow("No repository specified. Use --repo to see knowledge store status."));
+        console.log(chalk.gray("  Example: ai-tutor status --repo owner/repo"));
+      }
 
       console.log(chalk.white("\nConfiguration:"));
-      console.log(
-        chalk.gray(`  Learner Model: ${config.agents.learner.model}`)
-      );
-      console.log(
-        chalk.gray(`  Reviewer Model: ${config.agents.reviewer.model}`)
-      );
+      console.log(chalk.gray(`  Supabase URL: ${config.supabase.url ? "configured" : "not configured"}`));
+      console.log(chalk.gray(`  Learner Model: ${config.agents.learner.model}`));
+      console.log(chalk.gray(`  Reviewer Model: ${config.agents.reviewer.model}`));
       console.log(chalk.gray(`  Tutor Model: ${config.agents.tutor.model}`));
 
       console.log();
