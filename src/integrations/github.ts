@@ -175,6 +175,144 @@ export async function getRepoContents(
   throw new Error(`Could not get content for ${filePath}`);
 }
 
+// ============================================
+// Repository Content Fetching (for Learning)
+// ============================================
+
+const CODE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".py", ".go", ".rs", ".java", ".kt", ".swift"];
+const MAX_FILE_SIZE = 10000; // 10KB limit per file
+const MAX_FILES = 50; // Limit number of files
+
+export interface RepoFile {
+  path: string;
+  content: string;
+}
+
+export async function fetchRepoCodeFiles(
+  repoFullName: string,
+  branch?: string
+): Promise<RepoFile[]> {
+  const [owner, repo] = repoFullName.split("/");
+  const client = getOctokit();
+
+  console.log(`   Fetching repository tree from GitHub...`);
+
+  // Get default branch if not specified
+  if (!branch) {
+    const { data: repoData } = await client.repos.get({ owner, repo });
+    branch = repoData.default_branch;
+  }
+
+  // Get the tree recursively
+  const { data: refData } = await client.git.getRef({
+    owner,
+    repo,
+    ref: `heads/${branch}`,
+  });
+
+  const { data: tree } = await client.git.getTree({
+    owner,
+    repo,
+    tree_sha: refData.object.sha,
+    recursive: "true",
+  });
+
+  // Filter for code files
+  const codeFiles = tree.tree.filter((item) => {
+    if (item.type !== "blob" || !item.path) return false;
+    const ext = item.path.substring(item.path.lastIndexOf("."));
+    return CODE_EXTENSIONS.includes(ext);
+  });
+
+  console.log(`   Found ${codeFiles.length} code files, fetching up to ${MAX_FILES}...`);
+
+  // Fetch file contents (limited)
+  const files: RepoFile[] = [];
+  const filesToFetch = codeFiles.slice(0, MAX_FILES);
+
+  for (const file of filesToFetch) {
+    try {
+      const content = await getRepoContents(repoFullName, file.path!, branch);
+
+      // Skip files that are too large
+      if (content.length > MAX_FILE_SIZE) {
+        console.log(`   Skipping ${file.path} (too large)`);
+        continue;
+      }
+
+      files.push({
+        path: file.path!,
+        content,
+      });
+    } catch (error) {
+      console.log(`   Failed to fetch ${file.path}`);
+    }
+  }
+
+  console.log(`   Successfully fetched ${files.length} files`);
+  return files;
+}
+
+export async function fetchRepoADRs(
+  repoFullName: string,
+  branch?: string
+): Promise<RepoFile[]> {
+  const [owner, repo] = repoFullName.split("/");
+  const client = getOctokit();
+
+  // Get default branch if not specified
+  if (!branch) {
+    const { data: repoData } = await client.repos.get({ owner, repo });
+    branch = repoData.default_branch;
+  }
+
+  // Get the tree recursively
+  const { data: refData } = await client.git.getRef({
+    owner,
+    repo,
+    ref: `heads/${branch}`,
+  });
+
+  const { data: tree } = await client.git.getTree({
+    owner,
+    repo,
+    tree_sha: refData.object.sha,
+    recursive: "true",
+  });
+
+  // Look for ADR files (typically in docs/adr, adr, or docs/decisions)
+  const adrFiles = tree.tree.filter((item) => {
+    if (item.type !== "blob" || !item.path) return false;
+    const path = item.path.toLowerCase();
+    return (
+      path.endsWith(".md") &&
+      (path.includes("adr") || path.includes("decision"))
+    );
+  });
+
+  if (adrFiles.length === 0) {
+    return [];
+  }
+
+  console.log(`   Found ${adrFiles.length} ADR files`);
+
+  // Fetch ADR contents
+  const files: RepoFile[] = [];
+  for (const file of adrFiles.slice(0, 20)) {
+    try {
+      const content = await getRepoContents(repoFullName, file.path!, branch);
+      files.push({
+        path: file.path!,
+        content,
+      });
+    } catch (error) {
+      console.log(`   Failed to fetch ${file.path}`);
+    }
+  }
+
+  return files;
+}
+
 // Webhook payload types
 export interface PRWebhookPayload {
   action: "opened" | "synchronize" | "reopened" | "closed";

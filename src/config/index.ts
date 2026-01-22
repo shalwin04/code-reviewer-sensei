@@ -34,6 +34,14 @@ export function loadConfig(): AppConfig {
     knowledgeStore: {
       path: process.env.KNOWLEDGE_STORE_PATH || "./data/knowledge",
     },
+    supabase: {
+      url: process.env.SUPABASE_URL || "",
+      anonKey: process.env.SUPABASE_ANON_KEY || "",
+      serviceKey: process.env.SUPABASE_SERVICE_KEY || "",
+    },
+    repository: {
+      fullName: process.env.REPOSITORY_FULL_NAME || "",
+    },
     server: {
       port: parseInt(process.env.PORT || "3000", 10),
       host: process.env.HOST || "localhost",

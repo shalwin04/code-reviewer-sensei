@@ -232,6 +232,14 @@ export interface AppConfig {
   knowledgeStore: {
     path: string;
   };
+  supabase: {
+    url: string;
+    anonKey: string;
+    serviceKey: string;
+  };
+  repository: {
+    fullName: string;
+  };
   server: {
     port: number;
     host: string;
