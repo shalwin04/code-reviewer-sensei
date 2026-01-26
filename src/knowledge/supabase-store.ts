@@ -483,3 +483,37 @@ export async function getSupabaseKnowledgeStore(
 export function clearStoreCache(): void {
   storeInstances.clear();
 }
+
+// Get all repositories with conventions
+export async function getAvailableRepositories(): Promise<
+  Array<{
+    fullName: string;
+    conventionCount: number;
+    lastLearned: string | null;
+  }>
+> {
+  const supabase = getSupabaseClient();
+
+  // Get repositories with convention counts
+  const { data: repos, error } = await supabase
+    .from("repositories")
+    .select(`
+      full_name,
+      last_learned_at,
+      conventions:conventions(count)
+    `)
+    .order("last_learned_at", { ascending: false, nullsFirst: false });
+
+  if (error) {
+    console.error("Failed to get repositories:", error.message);
+    return [];
+  }
+
+  return (repos || [])
+    .map((r: any) => ({
+      fullName: r.full_name,
+      conventionCount: r.conventions?.[0]?.count || 0,
+      lastLearned: r.last_learned_at,
+    }))
+    .filter((r) => r.conventionCount > 0);
+}

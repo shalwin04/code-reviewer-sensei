@@ -12,7 +12,7 @@ import {
   orchestrateLearning,
   formatForConsole,
 } from "../orchestrator/index.js";
-import { getSupabaseKnowledgeStore } from "../knowledge/supabase-store.js";
+import { getSupabaseKnowledgeStore, getAvailableRepositories } from "../knowledge/supabase-store.js";
 import { config } from "../config/index.js";
 import { fetchPRDiff, fetchRepoCodeFiles, fetchRepoADRs } from "../integrations/github.js";
 import type { FeedbackControllerStateUpdated } from "../types/index.js";
@@ -243,44 +243,200 @@ program
   });
 
 // ============================================
-// Ask Command
+// Ask Command (AI Coach Mode)
 // ============================================
 
 program
   .command("ask [question...]")
-  .description("Ask a question about team conventions")
-  .action(async (questionParts: string[]) => {
-    let question: string;
+  .description("Start an AI coaching session about team conventions")
+  .option("-r, --repo <owner/repo>", "Repository to query (optional - will prompt if not provided)")
+  .action(async (questionParts: string[], options) => {
+    console.log(chalk.cyan("\n🤖 AI Code Coach"));
+    console.log(chalk.gray("Your personal guide to team conventions\n"));
 
-    // If question provided as arguments, join them
-    if (questionParts && questionParts.length > 0) {
-      question = questionParts.join(" ");
+    let selectedRepo: string;
+
+    // If repo provided via flag, use it
+    if (options.repo) {
+      selectedRepo = options.repo;
     } else {
-      // Interactive mode - prompt for question
+      // Fetch available repositories
+      const spinner = ora("Loading available repositories...").start();
+      let availableRepos: Array<{ fullName: string; conventionCount: number; lastLearned: string | null }> = [];
+
+      try {
+        availableRepos = await getAvailableRepositories();
+        spinner.stop();
+      } catch (error) {
+        spinner.fail("Could not load repositories");
+        console.log(chalk.yellow("Make sure Supabase is configured in .env\n"));
+      }
+
+      if (availableRepos.length > 0) {
+        // Show repos with conventions
+        console.log(chalk.white("I have learned conventions from these repositories:\n"));
+
+        const repoChoices = availableRepos.map((r) => ({
+          name: `${r.fullName} ${chalk.gray(`(${r.conventionCount} conventions${r.lastLearned ? `, learned ${formatTimeAgo(r.lastLearned)}` : ""})`)}`,
+          value: r.fullName,
+        }));
+
+        repoChoices.push({
+          name: chalk.yellow("+ Enter a different repository"),
+          value: "__new__",
+        });
+
+        repoChoices.push({
+          name: chalk.blue("+ Learn from a new repository first"),
+          value: "__learn__",
+        });
+
+        const { repoChoice } = await inquirer.prompt([
+          {
+            type: "list",
+            name: "repoChoice",
+            message: "Which repository would you like to discuss?",
+            choices: repoChoices,
+          },
+        ]);
+
+        if (repoChoice === "__learn__") {
+          console.log(chalk.yellow("\nTo learn from a new repository, run:"));
+          console.log(chalk.gray("  npm run dev:cli learn --repo owner/repo --from-github\n"));
+          return;
+        }
+
+        if (repoChoice === "__new__") {
+          const { newRepo } = await inquirer.prompt([
+            {
+              type: "input",
+              name: "newRepo",
+              message: "Enter repository (owner/repo):",
+              validate: (input: string) =>
+                input.includes("/") || "Must be in format owner/repo",
+            },
+          ]);
+          selectedRepo = newRepo;
+        } else {
+          selectedRepo = repoChoice;
+        }
+      } else {
+        // No repos found - prompt for new one
+        console.log(chalk.yellow("No repositories with conventions found.\n"));
+        console.log(chalk.white("You can either:"));
+        console.log(chalk.gray("  1. Learn from a repository first:"));
+        console.log(chalk.gray("     npm run dev:cli learn --repo owner/repo --from-github\n"));
+        console.log(chalk.gray("  2. Enter a repository name to try:\n"));
+
+        const { newRepo } = await inquirer.prompt([
+          {
+            type: "input",
+            name: "newRepo",
+            message: "Enter repository (owner/repo) or 'exit':",
+          },
+        ]);
+
+        if (newRepo.toLowerCase() === "exit") {
+          return;
+        }
+
+        if (!newRepo.includes("/")) {
+          console.log(chalk.red("Invalid format. Use owner/repo\n"));
+          return;
+        }
+
+        selectedRepo = newRepo;
+      }
+    }
+
+    // Set repository context
+    config.repository.fullName = selectedRepo;
+
+    // Load and show convention summary
+    const spinner = ora("Loading conventions...").start();
+    try {
+      const store = await getSupabaseKnowledgeStore(selectedRepo);
+      const stats = await store.getStats();
+      spinner.succeed(`Loaded ${stats.conventions} conventions from ${selectedRepo}`);
+
+      if (Object.keys(stats.byCategory).length > 0) {
+        console.log(chalk.gray("\nCategories:"));
+        for (const [category, count] of Object.entries(stats.byCategory)) {
+          console.log(chalk.gray(`  • ${category}: ${count}`));
+        }
+      }
+    } catch (error) {
+      spinner.warn(`Repository loaded (conventions may not exist yet)`);
+    }
+
+    console.log(chalk.cyan("\n💬 Ask me anything about this codebase's conventions!"));
+    console.log(chalk.gray("Examples: 'How should I name files?', 'What's the error handling pattern?'"));
+    console.log(chalk.gray("Type 'exit' to quit, 'switch' to change repository\n"));
+
+    // If question provided as arguments, answer it first
+    if (questionParts && questionParts.length > 0) {
+      const question = questionParts.join(" ");
+      await askQuestion(question);
+    }
+
+    // Interactive Q&A loop
+    while (true) {
       const { userQuestion } = await inquirer.prompt([
         {
           type: "input",
           name: "userQuestion",
-          message: "What would you like to ask?",
-          validate: (input: string) => input.trim().length > 0 || "Please enter a question",
+          message: chalk.green("You:"),
         },
       ]);
-      question = userQuestion;
-    }
 
-    const spinner = ora("Thinking...").start();
+      const trimmed = userQuestion.trim().toLowerCase();
 
-    try {
-      const result = await orchestrateQuestion(question);
+      if (trimmed === "exit" || trimmed === "quit") {
+        console.log(chalk.cyan("\n👋 Happy coding! Remember to follow team conventions.\n"));
+        break;
+      }
 
-      spinner.succeed("Here's what I found:");
-      console.log(chalk.white(`\n${result.finalOutput}\n`));
-    } catch (error) {
-      spinner.fail("Failed to answer question");
-      console.error(chalk.red(error));
-      process.exit(1);
+      if (trimmed === "switch") {
+        console.log(chalk.yellow("\nRestart the command to switch repositories.\n"));
+        continue;
+      }
+
+      if (trimmed === "") {
+        continue;
+      }
+
+      await askQuestion(userQuestion);
     }
   });
+
+async function askQuestion(question: string) {
+  const spinner = ora("Thinking...").start();
+
+  try {
+    const result = await orchestrateQuestion(question);
+    spinner.stop();
+
+    console.log(chalk.cyan("\n🤖 Coach:"));
+    console.log(chalk.white(`${result.finalOutput}\n`));
+  } catch (error) {
+    spinner.fail("Failed to answer");
+    console.error(chalk.red(`${error}\n`));
+  }
+}
+
+function formatTimeAgo(dateStr: string): string {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMins / 60);
+  const diffDays = Math.floor(diffHours / 24);
+
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return date.toLocaleDateString();
+}
 
 // ============================================
 // Interactive Command

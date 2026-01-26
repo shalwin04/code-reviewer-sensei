@@ -2,7 +2,7 @@ import { StateGraph, START, END, Annotation } from "@langchain/langgraph";
 import { createLLM } from "../../utils/llm.js";
 import { config } from "../../config/index.js";
 import { getSupabaseKnowledgeStore } from "../../knowledge/supabase-store.js";
-import type { RawViolation, ExplainedFeedback, TutorState } from "../../types/index.js";
+import type { RawViolation, ExplainedFeedback, TutorState, Convention } from "../../types/index.js";
 
 // ============================================
 // Tutor Agent State
@@ -157,44 +157,69 @@ export async function answerQuestion(question: string): Promise<string> {
   const llm = createLLM(config.agents.tutor);
 
   // Get conventions from knowledge store for context
+  let conventions: Convention[] = [];
   let conventionContext = "";
+
   try {
     if (config.repository.fullName) {
+      console.log(`   Loading conventions from: ${config.repository.fullName}`);
       const store = await getSupabaseKnowledgeStore(config.repository.fullName);
-      const conventions = await store.getAllConventions();
+      conventions = await store.getAllConventions();
+      console.log(`   Found ${conventions.length} conventions`);
+
       if (conventions.length > 0) {
+        // Build detailed context from conventions
         conventionContext = `
-Available team conventions for context:
-${conventions.slice(0, 10).map(c => `- [${c.category}] ${c.rule}`).join("\n")}
+## Team Conventions (${conventions.length} total)
+
+${conventions.slice(0, 15).map(c => `### [${c.category.toUpperCase()}] ${c.rule}
+${c.description}
+${c.examples?.[0]?.good ? `Good: ${c.examples[0].good.substring(0, 100)}...` : ""}
+`).join("\n")}
 `;
       }
+    } else {
+      console.log("   No repository configured - answering without conventions");
     }
-  } catch {
-    // Continue without conventions if store unavailable
+  } catch (error) {
+    console.error("   Error loading conventions:", error);
   }
 
-  const prompt = `
-You are a helpful engineering tutor answering questions about team conventions and coding practices.
+  const prompt = conventionContext ? `
+You are a helpful engineering tutor for a development team. You have access to the team's coding conventions and standards.
 
 ${conventionContext}
 
-Question: ${question}
+Based on the team conventions above, answer this question:
+"${question}"
 
 Instructions:
+- Reference specific conventions when applicable
+- Explain the team's reasoning behind the convention
+- Be concise but educational (3-5 sentences)
+- If no convention directly applies, say so and provide general best practices
+` : `
+You are a helpful engineering tutor answering questions about coding practices.
+
+Question: "${question}"
+
+Instructions:
+- Note: No team conventions are loaded. Providing general best practices.
 - Answer concisely in 3-5 sentences
-- Focus on the team's perspective and reasoning
 - Be helpful and educational
-- If the question is about something not covered by team conventions, provide general best practices
 `;
 
   try {
     const response = await llm.invoke(prompt);
     let answer = response.content?.toString() || "";
 
-    // Clean up
-    answer = answer.replace(/\n+/g, " ").trim();
-    answer = answer.split(". ").slice(0, 5).join(". ") + ".";
-    answer = answer.replace(/\.\.+$/, ".");
+    // Light cleanup - preserve formatting
+    answer = answer.trim();
+
+    // Add convention count info
+    if (conventions.length > 0) {
+      answer = `[Based on ${conventions.length} team conventions]\n\n${answer}`;
+    }
 
     return answer;
   } catch (error) {
