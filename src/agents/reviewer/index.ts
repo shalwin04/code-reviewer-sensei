@@ -1,5 +1,5 @@
 import { StateGraph, START, END, Annotation } from "@langchain/langgraph";
-import { getKnowledgeStore } from "../../knowledge/store.js";
+import { getSupabaseKnowledgeStore } from "../../knowledge/supabase-store.js";
 import { config } from "../../config/index.js";
 import {
   reviewNaming,
@@ -60,12 +60,16 @@ type ReviewerOrchestratorState = typeof ReviewerOrchestratorAnnotation.State;
 async function loadConventions(
   _state: ReviewerOrchestratorState
 ): Promise<Partial<ReviewerOrchestratorState>> {
-  console.log("📖 Reviewer: Loading team conventions...");
+  console.log("📖 Reviewer: Loading team conventions from Supabase...");
 
-  const store = await getKnowledgeStore(config.knowledgeStore.path);
-  const conventions = store.getAllConventions();
+  if (!config.repository.fullName) {
+    throw new Error("Repository full name not configured");
+  }
 
-  console.log(`   Found ${conventions.length} conventions`);
+  const store = await getSupabaseKnowledgeStore(config.repository.fullName);
+  const conventions = await store.getAllConventions();
+
+  console.log(`   Loaded ${conventions.length} conventions`);
 
   return {
     conventions,
@@ -77,6 +81,10 @@ async function runSubReviewers(
   state: ReviewerOrchestratorState
 ): Promise<Partial<ReviewerOrchestratorState>> {
   console.log("🔍 Reviewer: Running sub-reviewers...");
+  console.log(
+    "   Active conventions:",
+    state.conventions.map(c => `${c.category}: ${c.rule}`)
+  );
 
   const allViolations: RawViolation[] = [];
   const reviewedFiles: string[] = [];
@@ -84,14 +92,17 @@ async function runSubReviewers(
   for (const file of state.prDiff.files) {
     console.log(`   Reviewing: ${file.path}`);
 
-    // Run all sub-reviewers in parallel for each file
-    const [namingViolations, structureViolations, patternViolations, testingViolations] =
-      await Promise.all([
-        reviewNaming(file.diff, file.path, state.conventions),
-        reviewStructure(file.diff, file.path, state.conventions),
-        reviewPatterns(file.diff, file.path, state.conventions),
-        reviewTesting(file.diff, file.path, state.conventions),
-      ]);
+    const [
+      namingViolations,
+      structureViolations,
+      patternViolations,
+      testingViolations,
+    ] = await Promise.all([
+      reviewNaming(file.diff, file.path, state.conventions),
+      reviewStructure(file.diff, file.path, state.conventions),
+      reviewPatterns(file.diff, file.path, state.conventions),
+      reviewTesting(file.diff, file.path, state.conventions),
+    ]);
 
     allViolations.push(
       ...namingViolations,
@@ -103,7 +114,7 @@ async function runSubReviewers(
     reviewedFiles.push(file.path);
   }
 
-  console.log(`   Found ${allViolations.length} violations across all files`);
+  console.log(`   Found ${allViolations.length} violations`);
 
   return {
     violations: allViolations,
@@ -116,12 +127,10 @@ async function aggregateResults(
 ): Promise<Partial<ReviewerOrchestratorState>> {
   console.log("📊 Reviewer: Aggregating results...");
 
-  // Sort violations by severity and file
   const sortedViolations = [...state.violations].sort((a, b) => {
-    const severityOrder = { error: 0, warning: 1, suggestion: 2 };
-    const severityDiff = severityOrder[a.severity] - severityOrder[b.severity];
-    if (severityDiff !== 0) return severityDiff;
-    return a.file.localeCompare(b.file);
+    const order = { error: 0, warning: 1, suggestion: 2 };
+    const diff = order[a.severity] - order[b.severity];
+    return diff !== 0 ? diff : a.file.localeCompare(b.file);
   });
 
   return {
@@ -131,20 +140,19 @@ async function aggregateResults(
 }
 
 // ============================================
-// Build Reviewer Orchestrator Graph
+// Build Reviewer Graph
 // ============================================
 
 export function createReviewerGraph() {
-  const graph = new StateGraph(ReviewerOrchestratorAnnotation)
+  return new StateGraph(ReviewerOrchestratorAnnotation)
     .addNode("load_conventions", loadConventions)
     .addNode("run_sub_reviewers", runSubReviewers)
     .addNode("aggregate_results", aggregateResults)
     .addEdge(START, "load_conventions")
     .addEdge("load_conventions", "run_sub_reviewers")
     .addEdge("run_sub_reviewers", "aggregate_results")
-    .addEdge("aggregate_results", END);
-
-  return graph.compile();
+    .addEdge("aggregate_results", END)
+    .compile();
 }
 
 // ============================================
@@ -153,7 +161,6 @@ export function createReviewerGraph() {
 
 export async function reviewPR(prDiff: PRDiffInput): Promise<ReviewerState> {
   console.log(`\n🚀 Starting review for PR #${prDiff.prNumber}: ${prDiff.title}`);
-  console.log(`   Files to review: ${prDiff.files.length}`);
 
   const graph = createReviewerGraph();
 
@@ -175,45 +182,3 @@ export async function reviewPR(prDiff: PRDiffInput): Promise<ReviewerState> {
 }
 
 export * from "./sub-reviewers/index.js";
-
-import type { OrchestratorState } from "../graph.js";
-
-/**
- * LangGraph-compatible reviewer node
- * Adapts OrchestratorState → Reviewer graph → OrchestratorState
- */
-export async function reviewerAgent(
-  state: OrchestratorState
-): Promise<Partial<OrchestratorState>> {
-  // QUESTION mode: skip reviewer entirely
-  if (state.context === "QUESTION") {
-    return {};
-  }
-
-  // If no PR diff provided, return mock violations (demo-safe)
- if (!state.prDiff || state.prDiff.files.length === 0) {
-  return {
-  violations: [
-    {
-      id: "v1",
-      type: "error-handling",
-      issue: "Missing error handling for payment service",
-      conventionId: "ERR-03",
-      file: "orderService.ts",
-      line: 142,
-      code: "await paymentService.charge(card)",
-      severity: "error",
-    },
-  ],
-};
-
-}
-
-
-  const result = await reviewPR(state.prDiff);
-
-  return {
-    violations: result.violations,
-  };
-}
-

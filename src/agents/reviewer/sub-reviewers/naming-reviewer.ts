@@ -1,77 +1,81 @@
-import { PromptTemplate } from "@langchain/core/prompts";
-import { StructuredOutputParser } from "@langchain/core/output_parsers";
-import { z } from "zod";
-import { createLLM } from "../../../utils/llm.js";
-import { config } from "../../../config/index.js";
-import type { RawViolation, Convention } from "../../../types/index.js";
+import type { Convention, RawViolation } from "../../../types/index.js";
 
-const ViolationsSchema = z.object({
-  violations: z.array(
-    z.object({
-      line: z.number(),
-      file: z.string(),
-      code: z.string().describe("The problematic code snippet"),
-      issue: z.string().describe("Brief description of the naming issue"),
-      severity: z.enum(["error", "warning", "suggestion"]),
-      conventionId: z.string().optional(),
-    })
-  ),
-});
-
-const violationsParser = StructuredOutputParser.fromZodSchema(ViolationsSchema);
-
-const NAMING_REVIEW_PROMPT = PromptTemplate.fromTemplate(`
-You are a specialized naming convention reviewer. Your ONLY job is to detect naming violations.
-
-## Team Naming Conventions:
-{conventions}
-
-## Code Diff to Review:
-{diff}
-
-## Instructions:
-- Check variable names, function names, class names, file names, constants
-- Compare against the team's established naming conventions
-- Only report actual violations - not style preferences
-- Be specific about line numbers and the exact issue
-
-{format_instructions}
-`);
-
+/**
+ * Naming Reviewer
+ * Checks file names, variable names, function names
+ */
 export async function reviewNaming(
   diff: string,
   filePath: string,
   conventions: Convention[]
 ): Promise<RawViolation[]> {
-  const llm = createLLM(config.agents.reviewer);
+  const violations: RawViolation[] = [];
 
-  const namingConventions = conventions
-    .filter((c) => c.category === "naming")
-    .map((c) => `- ${c.rule}: ${c.description}`)
-    .join("\n");
+  // Only naming conventions
+  const namingConventions = conventions.filter(
+    (c) => c.category === "naming"
+  );
 
-  const prompt = await NAMING_REVIEW_PROMPT.format({
-    conventions: namingConventions || "No specific naming conventions defined.",
-    diff,
-    format_instructions: violationsParser.getFormatInstructions(),
+  if (namingConventions.length === 0) {
+    return violations;
+  }
+
+  // ---------- FILE NAME CHECK ----------
+  for (const conv of namingConventions) {
+    if (conv.rule.toLowerCase().includes("pascalcase")) {
+      const fileName = filePath.split("/").pop() ?? "";
+
+      const pascalCaseRegex = /^[A-Z][a-zA-Z0-9]*\.(ts|tsx)$/;
+
+      if (!pascalCaseRegex.test(fileName)) {
+        violations.push({
+          id: `naming-file-${Date.now()}`,
+          type: "naming",
+          issue: conv.rule,
+          conventionId: conv.id,
+          file: filePath,
+          line: 1,
+          code: fileName,
+          severity: "warning",
+        });
+      }
+    }
+  }
+
+  // ---------- VARIABLE / FUNCTION CHECK ----------
+  const lines = diff.split("\n");
+
+  lines.forEach((line, index) => {
+    const trimmed = line.trim();
+
+    // match: const my_var = ...
+    const variableMatch = trimmed.match(
+      /(const|let|var)\s+([a-zA-Z0-9_]+)/
+    );
+
+    if (variableMatch) {
+      const variableName = variableMatch[2];
+
+      for (const conv of namingConventions) {
+        if (conv.rule.toLowerCase().includes("camelcase")) {
+          const camelCaseRegex = /^[a-z][a-zA-Z0-9]*$/;
+
+          if (!camelCaseRegex.test(variableName)) {
+            violations.push({
+              id: `naming-var-${Date.now()}-${index}`,
+              type: "naming",
+              issue: `Variable "${variableName}" should be camelCase`,
+              conventionId: conv.id,
+              file: filePath,
+              line: index + 1,
+              code: line,
+              severity: "warning",
+            });
+          }
+        }
+      }
+    }
   });
 
-  try {
-    const response = await llm.invoke(prompt);
-    const parsed = await violationsParser.parse(response.content as string);
-
-    return parsed.violations.map((v) => ({
-      id: `naming-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      type: "naming" as const,
-      issue: v.issue,
-      file: filePath,
-      line: v.line,
-      code: v.code,
-      severity: v.severity,
-      conventionId: v.conventionId || "",
-    }));
-  } catch (error) {
-    console.error("Naming reviewer error:", error);
-    return [];
-  }
+  return violations;
 }
