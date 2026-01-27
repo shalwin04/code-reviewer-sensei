@@ -24,7 +24,7 @@ export async function structureReviewNode(
     };
   }
 
-  // 1️⃣ Read conventions from GLOBAL shared memory
+  // 1️⃣ Read conventions from GLOBAL shared memorys
   const structureConventions = state.conventions.filter(
     (c) => c.category === "structure"
   );
