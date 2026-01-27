@@ -15,6 +15,7 @@ import type {
   ExplainedFeedback,
   FeedbackControllerStateUpdated,
   LearnerState,
+  Convention,
 } from "../types/index.js";
 
 // ============================================
@@ -40,6 +41,11 @@ const OrchestratorAnnotation = Annotation.Root({
   learningSources: Annotation<LearnerState["sources"] | null>({
     reducer: (_, b) => b,
     default: () => null,
+  }),
+  // Conventions JSON - loaded from DB, shared across agents
+  conventions: Annotation<Convention[]>({
+    reducer: (_, b) => b,
+    default: () => [],
   }),
   violations: Annotation<RawViolation[]>({
     reducer: (_, b) => b,
@@ -86,10 +92,39 @@ function routeTrigger(state: OrchestratorState): string {
 // Node Functions
 // ============================================
 
+// Load conventions from Supabase into state (JSON)
+// This runs BEFORE the reviewer so conventions are in the shared state
+async function loadConventionsNode(
+  _state: OrchestratorState
+): Promise<Partial<OrchestratorState>> {
+  console.log("\n📚 Orchestrator: Loading conventions from knowledge store...");
+
+  if (!config.repository.fullName) {
+    console.log("   No repository configured, skipping convention loading");
+    return { conventions: [] };
+  }
+
+  try {
+    const store = await getSupabaseKnowledgeStore(config.repository.fullName);
+    const conventions = await store.getAllConventions();
+
+    console.log(`   Loaded ${conventions.length} conventions as JSON`);
+    console.log(`   Categories: ${[...new Set(conventions.map(c => c.category))].join(", ")}`);
+
+    return {
+      conventions,
+    };
+  } catch (error) {
+    console.error(`   Failed to load conventions: ${error}`);
+    return { conventions: [] };
+  }
+}
+
 async function reviewPRNode(
   state: OrchestratorState
 ): Promise<Partial<OrchestratorState>> {
   console.log("\n🔍 Orchestrator: Starting PR review...");
+  console.log(`   Conventions available in state: ${state.conventions.length}`);
 
   if (!state.prDiff) {
     return {
@@ -99,6 +134,8 @@ async function reviewPRNode(
   }
 
   try {
+    // TODO: Friend's reviewer should accept conventions from state
+    // conventions are available at: state.conventions (Convention[] JSON)
     const reviewResult = await reviewPR({
       prNumber: state.prDiff.prNumber,
       title: state.prDiff.title,
@@ -247,16 +284,18 @@ async function learnConventionsNode(
 
 export function createOrchestratorGraph() {
   const graph = new StateGraph(OrchestratorAnnotation)
+    .addNode("load_conventions", loadConventionsNode)
     .addNode("review_pr", reviewPRNode)
     .addNode("explain_violations", explainViolationsNode)
     .addNode("prepare_feedback", prepareFeedbackNode)
     .addNode("answer_question", answerQuestionNode)
     .addNode("learn_conventions", learnConventionsNode)
     .addConditionalEdges(START, routeTrigger, {
-      review_pr: "review_pr",
+      review_pr: "load_conventions",         // load conventions first
       answer_question: "answer_question",
       learn_conventions: "learn_conventions",
     })
+    .addEdge("load_conventions", "review_pr") // then review
     .addEdge("review_pr", "explain_violations")
     .addEdge("explain_violations", "prepare_feedback")
     .addEdge("prepare_feedback", END)
@@ -278,6 +317,7 @@ export async function orchestrateReview(prDiff: PRDiffInput) {
     prDiff,
     question: null,
     learningSources: null,
+    conventions: [],       // loaded by load_conventions node
     violations: [],
     explainedFeedback: [],
     finalOutput: null,
@@ -296,6 +336,7 @@ export async function orchestrateQuestion(question: string) {
     prDiff: null,
     question,
     learningSources: null,
+    conventions: [],
     violations: [],
     explainedFeedback: [],
     finalOutput: null,
@@ -322,6 +363,7 @@ export async function orchestrateLearning(
     prDiff: null,
     question: null,
     learningSources: sources,
+    conventions: [],
     violations: [],
     explainedFeedback: [],
     finalOutput: null,
