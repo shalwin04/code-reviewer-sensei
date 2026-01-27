@@ -39,6 +39,9 @@ program
   .action(async (options) => {
     const spinner = ora("Starting review...").start();
 
+     if (options.repo) {
+    config.repository.fullName = options.repo;
+  }
     try {
       let prDiff;
 

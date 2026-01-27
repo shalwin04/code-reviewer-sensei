@@ -1,80 +1,114 @@
-import { PromptTemplate } from "@langchain/core/prompts";
-import { StructuredOutputParser } from "@langchain/core/output_parsers";
-import { z } from "zod";
-import { createLLM } from "../../../utils/llm.js";
-import { config } from "../../../config/index.js";
-import type { RawViolation, Convention } from "../../../types/index.js";
+// ============================================================================
+// GLOBAL STRUCTURE REVIEWER NODE
+// Runs INSIDE the orchestrator graph
+// ============================================================================
 
-const ViolationsSchema = z.object({
-  violations: z.array(
-    z.object({
-      line: z.number(),
-      file: z.string(),
-      code: z.string().describe("The problematic code snippet"),
-      issue: z.string().describe("Brief description of the structural issue"),
-      severity: z.enum(["error", "warning", "suggestion"]),
-      conventionId: z.string().optional(),
-    })
-  ),
-});
+import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import type { OrchestratorState } from "../../../orchestrator/index.js";
+import type { Convention, RawViolation } from "../../../types/index.js";
+import { getModelForTask } from "../../../utils/llm.js";
 
-const violationsParser = StructuredOutputParser.fromZodSchema(ViolationsSchema);
+// ============================================================================
+// Structure Review Node
+// ============================================================================
 
-const STRUCTURE_REVIEW_PROMPT = PromptTemplate.fromTemplate(`
-You are a specialized code structure reviewer. Your ONLY job is to detect structural issues.
+export async function structureReviewNode(
+  state: OrchestratorState
+): Promise<Partial<OrchestratorState>> {
+  console.log("\n🏗️ Orchestrator: Running structure review...");
+
+  if (!state.prDiff) {
+    return {
+      status: "error",
+      errors: ["No PR diff available for structure review"],
+    };
+  }
+
+  // 1️⃣ Read conventions from GLOBAL shared memory
+  const structureConventions = state.conventions.filter(
+    (c) => c.category === "structure"
+  );
+
+  if (structureConventions.length === 0) {
+    console.log("   ⚠️ No structure conventions found");
+    return {}; // do nothing, keep existing violations
+  }
+
+  const llm = getModelForTask("reviewer", "google");
+  const newViolations: RawViolation[] = [];
+
+  // 2️⃣ Review each file in the PR
+  for (const file of state.prDiff.files) {
+    console.log(`   🏗️ Reviewing structure of ${file.path}`);
+
+    const systemPrompt = `
+You are an expert code structure reviewer.
 
 ## Team Structure Conventions:
-{conventions}
+${structureConventions
+  .map(
+    (c) => `
+### ${c.rule}
+${c.description}
+Tags: ${c.tags.join(", ")}
+Confidence: ${c.confidence}
+`
+  )
+  .join("\n---\n")}
 
-## Code Diff to Review:
-{diff}
+Return ONLY a JSON array of violations.
+Each violation must be:
+{
+  "issue": string,
+  "conventionId": string,
+  "file": string,
+  "line": number,
+  "code": string,
+  "severity": "error" | "warning" | "suggestion"
+}
+If none, return [].
+`;
 
-## Instructions:
-- Check file organization and module structure
-- Look for proper separation of concerns
-- Check import/export patterns
-- Verify component/class organization
-- Look for proper layering (controllers, services, repositories, etc.)
-- Only report actual violations against team conventions
+    const userPrompt = `
+File path: ${file.path}
 
-{format_instructions}
-`);
+Code diff:
+${file.diff}
 
-export async function reviewStructure(
-  diff: string,
-  filePath: string,
-  conventions: Convention[]
-): Promise<RawViolation[]> {
-  const llm = createLLM(config.agents.reviewer);
+Analyze ONLY structural issues.
+`;
 
-  const structureConventions = conventions
-    .filter((c) => c.category === "structure")
-    .map((c) => `- ${c.rule}: ${c.description}`)
-    .join("\n");
+    try {
+      const response = await llm.invoke([
+        new SystemMessage(systemPrompt),
+        new HumanMessage(userPrompt),
+      ]);
 
-  const prompt = await STRUCTURE_REVIEW_PROMPT.format({
-    conventions:
-      structureConventions || "No specific structure conventions defined.",
-    diff,
-    format_instructions: violationsParser.getFormatInstructions(),
-  });
+      const content = response.content.toString();
+      const match = content.match(/\[[\s\S]*\]/);
 
-  try {
-    const response = await llm.invoke(prompt);
-    const parsed = await violationsParser.parse(response.content as string);
+      if (!match) continue;
 
-    return parsed.violations.map((v) => ({
-      id: `structure-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      type: "structure" as const,
-      issue: v.issue,
-      file: filePath,
-      line: v.line,
-      code: v.code,
-      severity: v.severity,
-      conventionId: v.conventionId || "",
-    }));
-  } catch (error) {
-    console.error("Structure reviewer error:", error);
-    return [];
+      const parsed = JSON.parse(match[0]);
+
+      for (const v of parsed) {
+        newViolations.push({
+          id: `structure-${Date.now()}-${Math.random()
+            .toString(36)
+            .slice(2)}`,
+          type: "structure",
+          ...v,
+        });
+      }
+    } catch (err) {
+      console.error(`   ❌ Structure review failed for ${file.path}`, err);
+    }
   }
+
+  console.log(`   ✅ Structure review found ${newViolations.length} violations`);
+
+  // 3️⃣ WRITE DIRECTLY TO GLOBAL SHARED MEMORY
+  return {
+    violations: [...state.violations, ...newViolations],
+  };
 }
