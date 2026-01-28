@@ -1,81 +1,94 @@
-import type { Convention, RawViolation } from "../../../types/index.js";
+import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import type { OrchestratorState } from "../../../orchestrator/index.js";
+import type { RawViolation } from "../../../types/index.js";
+import { getModelForTask } from "../../../utils/llm.js";
 
-/**
- * Naming Reviewer
- * Checks file names, variable names, function names
- */
-export async function reviewNaming(
-  diff: string,
-  filePath: string,
-  conventions: Convention[]
-): Promise<RawViolation[]> {
-  const violations: RawViolation[] = [];
+export async function namingReviewNode(
+  state: OrchestratorState
+): Promise<Partial<OrchestratorState>> {
+  console.log("\n🏷️ Orchestrator: Running naming review...");
 
-  // Only naming conventions
-  const namingConventions = conventions.filter(
+  if (!state.prDiff) return {};
+
+  const namingConventions = state.conventions.filter(
     (c) => c.category === "naming"
   );
 
-  if (namingConventions.length === 0) {
-    return violations;
-  }
+  if (namingConventions.length === 0) return {};
 
-  // ---------- FILE NAME CHECK ----------
-  for (const conv of namingConventions) {
-    if (conv.rule.toLowerCase().includes("pascalcase")) {
-      const fileName = filePath.split("/").pop() ?? "";
+  const llm = getModelForTask("reviewer", "google");
+  const violations: RawViolation[] = [];
 
-      const pascalCaseRegex = /^[A-Z][a-zA-Z0-9]*\.(ts|tsx)$/;
+  for (const file of state.prDiff.files) {
+    const systemPrompt = `
+You are a senior engineer enforcing TEAM NAMING CONVENTIONS.
 
-      if (!pascalCaseRegex.test(fileName)) {
-        violations.push({
-          id: `naming-file-${Date.now()}`,
-          type: "naming",
-          issue: conv.rule,
-          conventionId: conv.id,
-          file: filePath,
-          line: 1,
-          code: fileName,
-          severity: "warning",
-        });
-      }
+Your job is NOT to restate rules.
+Your job is to explain:
+- WHY the team chose this naming convention
+- What breaks if consistency is lost
+- How it affects readability, reviews, and velocity
+
+## Team Naming Conventions:
+${namingConventions.map(c => `
+Rule: ${c.rule}
+Description: ${c.description}
+Tags: ${c.tags.join(", ")}
+Confidence: ${c.confidence}
+`).join("\n---\n")}
+
+Return ONLY a JSON array.
+Each item must be:
+{
+  "issue": string,
+  "conventionId": string,
+  "file": string,
+  "line": number,
+  "code": string,
+  "severity": "error" | "warning" | "suggestion",
+  "reasoning": string,
+  "impact": string,
+  "recommendation": string
+}
+`;
+
+    const userPrompt = `
+File: ${file.path}
+Code:
+${file.diff}
+
+Identify naming inconsistencies ONLY.
+Explain why the TEAM naming style matters.
+`;
+
+    const res = await llm.invoke([
+      new SystemMessage(systemPrompt),
+      new HumanMessage(userPrompt),
+    ]);
+
+    const match = res.content.toString().match(/\[[\s\S]*\]/);
+    if (!match) continue;
+
+    const parsed = JSON.parse(match[0]);
+    for (const v of parsed) {
+      violations.push({
+        id: `naming-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        type: "naming",
+        ...v,
+      });
     }
   }
+    console.log(
+  state.violations.map(v => ({
+    type: v.type,
+    hasReasoning: !!v.reasoning,
+    hasImpact: !!v.impact,
+    hasRecommendation: !!v.recommendation,
+  }))
+);
 
-  // ---------- VARIABLE / FUNCTION CHECK ----------
-  const lines = diff.split("\n");
 
-  lines.forEach((line, index) => {
-    const trimmed = line.trim();
-
-    // match: const my_var = ...
-    const variableMatch = trimmed.match(
-      /(const|let|var)\s+([a-zA-Z0-9_]+)/
-    );
-
-    if (variableMatch) {
-      const variableName = variableMatch[2];
-
-      for (const conv of namingConventions) {
-        if (conv.rule.toLowerCase().includes("camelcase")) {
-          const camelCaseRegex = /^[a-z][a-zA-Z0-9]*$/;
-
-          if (!camelCaseRegex.test(variableName)) {
-            violations.push({
-              id: `naming-var-${Date.now()}-${index}`,
-              type: "naming",
-              issue: `Variable "${variableName}" should be camelCase`,
-              conventionId: conv.id,
-              file: filePath,
-              line: index + 1,
-              code: line,
-              severity: "warning",
-            });
-          }
-        }
-      }
-    }
-  });
-
-  return violations;
+  return {
+    violations: [...state.violations, ...violations],
+  };
 }

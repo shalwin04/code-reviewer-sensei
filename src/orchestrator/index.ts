@@ -67,6 +67,11 @@ const OrchestratorAnnotation = Annotation.Root({
     reducer: (a, b) => [...a, ...b],
     default: () => [],
   }),
+  reviewSummary: Annotation<string | null>({
+  reducer: (_, b) => b,
+  default: () => null,
+}),
+
 });
 
 export type OrchestratorState = typeof OrchestratorAnnotation.State;
@@ -180,6 +185,58 @@ async function explainViolationsNode(
     };
   }
 }
+async function summarizeReviewNode(
+  state: OrchestratorState
+): Promise<Partial<OrchestratorState>> {
+  console.log("\n🧑‍🏫 Orchestrator: Summarizing PR review...");
+
+  if (state.violations.length === 0) {
+    return {
+      reviewSummary: "No issues found. This PR looks good to merge.",
+    };
+  }
+
+  // Only trust agentic violations
+  const agentic = state.violations.filter(
+    v => v.reasoning && v.impact && v.recommendation
+  );
+
+  if (agentic.length === 0) {
+    return {
+      reviewSummary:
+        "Issues were detected, but they lack sufficient reasoning to explain clearly.",
+    };
+  }
+
+  const llm = await import("../utils/llm.js").then(m =>
+    m.getModelForTask("reviewer", "google")
+  );
+
+  const prompt = `
+You are a senior engineer explaining THIS pull request to a junior developer.
+
+Rules:
+- Do NOT explain team rules
+- Do NOT restate conventions
+- Explain what is wrong in THIS PR
+- Be encouraging and human
+
+Violations:
+${agentic.map(v => `
+Type: ${v.type}
+Issue: ${v.issue}
+Impact: ${v.impact}
+`).join("\n---\n")}
+
+Write a 5–7 sentence summary.
+`;
+
+  const res = await llm.invoke(prompt);
+
+  return {
+    reviewSummary: res.content.toString().trim(),
+  };
+}
 
 async function prepareFeedbackNode(
   state: OrchestratorState
@@ -290,13 +347,15 @@ export function createOrchestratorGraph() {
     .addNode("prepare_feedback", prepareFeedbackNode)
     .addNode("answer_question", answerQuestionNode)
     .addNode("learn_conventions", learnConventionsNode)
+    .addNode("summarize_review", summarizeReviewNode)
     .addConditionalEdges(START, routeTrigger, {
       review_pr: "load_conventions",         // load conventions first
       answer_question: "answer_question",
       learn_conventions: "learn_conventions",
     })
     .addEdge("load_conventions", "review_pr") // then review
-    .addEdge("review_pr", "explain_violations")
+    .addEdge("review_pr", "summarize_review")
+    .addEdge("summarize_review", "explain_violations")
     .addEdge("explain_violations", "prepare_feedback")
     .addEdge("prepare_feedback", END)
     .addEdge("answer_question", END)
