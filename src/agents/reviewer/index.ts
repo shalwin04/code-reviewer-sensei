@@ -3,8 +3,13 @@ import { getSupabaseKnowledgeStore } from "../../knowledge/supabase-store.js";
 import { config } from "../../config/index.js";
 
 import { structureReviewNode } from "./sub-reviewers/structure-reviewer.js";
+<<<<<<< HEAD
 import { testingReviewNode } from "./sub-reviewers/testing-reviewer.js";
 
+=======
+import { namingReviewNode } from "./sub-reviewers/naming-reviewer.js";
+import { patternReviewNode } from "./sub-reviewers/pattern-reviewer.js";
+>>>>>>> 8cb3ffe71540cacfd77690f870db43e1e5cf3f21
 import type {
   RawViolation,
   Convention,
@@ -13,7 +18,7 @@ import type {
 } from "../../types/index.js";
 
 // ============================================
-// Reviewer Orchestrator State
+// Reviewer State
 // ============================================
 
 const ReviewerOrchestratorAnnotation = Annotation.Root({
@@ -34,7 +39,11 @@ const ReviewerOrchestratorAnnotation = Annotation.Root({
   }),
 
   violations: Annotation<RawViolation[]>({
+<<<<<<< HEAD
     reducer: (_, b) => b, // sub-reviewers return merged violations
+=======
+    reducer: (_, b) => b,
+>>>>>>> 8cb3ffe71540cacfd77690f870db43e1e5cf3f21
     default: () => [],
   }),
 
@@ -44,18 +53,11 @@ const ReviewerOrchestratorAnnotation = Annotation.Root({
   }),
 });
 
-type ReviewerOrchestratorState =
-  typeof ReviewerOrchestratorAnnotation.State;
-
 // ============================================
-// Nodes
+// Load conventions
 // ============================================
 
-async function loadConventions(
-  _state: ReviewerOrchestratorState
-): Promise<Partial<ReviewerOrchestratorState>> {
-  console.log("📖 Reviewer: Loading team conventions...");
-
+async function loadConventions(state: any) {
   if (!config.repository.fullName) {
     throw new Error("Repository full name not configured");
   }
@@ -63,24 +65,24 @@ async function loadConventions(
   const store = await getSupabaseKnowledgeStore(config.repository.fullName);
   const conventions = await store.getAllConventions();
 
-  console.log(`   Loaded ${conventions.length} conventions`);
-
-  return {
-    conventions,
-    status: "reviewing",
-  };
+  return { conventions, status: "reviewing" };
 }
 
 // ============================================
-// Build Reviewer Graph
+// Build Graph
 // ============================================
 
 export function createReviewerGraph() {
   return new StateGraph(ReviewerOrchestratorAnnotation)
     .addNode("load_conventions", loadConventions)
+<<<<<<< HEAD
 
     // 1️⃣ structure reviewer
+=======
+>>>>>>> 8cb3ffe71540cacfd77690f870db43e1e5cf3f21
     .addNode("structure_review", structureReviewNode)
+    .addNode("naming_review", namingReviewNode)
+    .addNode("pattern_review", patternReviewNode)
 
     // 2️⃣ testing reviewer
     .addNode("testing_review", testingReviewNode)
@@ -88,19 +90,23 @@ export function createReviewerGraph() {
     // Flow
     .addEdge(START, "load_conventions")
     .addEdge("load_conventions", "structure_review")
+<<<<<<< HEAD
     .addEdge("structure_review", "testing_review")
     .addEdge("testing_review", END)
 
+=======
+    .addEdge("structure_review", "naming_review")
+    .addEdge("naming_review", "pattern_review")
+    .addEdge("pattern_review", END)
+>>>>>>> 8cb3ffe71540cacfd77690f870db43e1e5cf3f21
     .compile();
 }
 
 // ============================================
-// Reviewer Entry Point
+// Entry Point
 // ============================================
 
 export async function reviewPR(prDiff: PRDiffInput): Promise<ReviewerState> {
-  console.log(`\n🚀 Starting review for PR #${prDiff.prNumber}: ${prDiff.title}`);
-
   const graph = createReviewerGraph();
 
   const result = await graph.invoke({
@@ -114,6 +120,6 @@ export async function reviewPR(prDiff: PRDiffInput): Promise<ReviewerState> {
     prNumber: prDiff.prNumber,
     violations: result.violations,
     status: result.status,
-    reviewedFiles: result.prDiff.files.map(f => f.path),
+    reviewedFiles: prDiff.files.map(f => f.path),
   };
 }
