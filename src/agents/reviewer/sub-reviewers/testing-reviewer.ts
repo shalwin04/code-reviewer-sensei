@@ -1,82 +1,133 @@
-import { PromptTemplate } from "@langchain/core/prompts";
-import { StructuredOutputParser } from "@langchain/core/output_parsers";
-import { z } from "zod";
-import { createLLM } from "../../../utils/llm.js";
-import { config } from "../../../config/index.js";
-import type { RawViolation, Convention } from "../../../types/index.js";
+// ============================================================================
+// GLOBAL TESTING REVIEWER NODE
+// Runs INSIDE the orchestrator graph
+// ============================================================================
 
-const ViolationsSchema = z.object({
-  violations: z.array(
-    z.object({
-      line: z.number(),
-      file: z.string(),
-      code: z.string().describe("The problematic code snippet"),
-      issue: z.string().describe("Brief description of the testing issue"),
-      severity: z.enum(["error", "warning", "suggestion"]),
-      conventionId: z.string().optional(),
-    })
-  ),
-});
+import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import type { OrchestratorState } from "../../../orchestrator/index.js";
+import type { Convention, RawViolation } from "../../../types/index.js";
+import { getModelForTask } from "../../../utils/llm.js";
 
-const violationsParser = StructuredOutputParser.fromZodSchema(ViolationsSchema);
+// ============================================================================
+// Testing Review Node
+// ============================================================================
 
-const TESTING_REVIEW_PROMPT = PromptTemplate.fromTemplate(`
-You are a specialized testing reviewer. Your ONLY job is to detect testing issues.
+export async function testingReviewNode(
+  state: OrchestratorState
+): Promise<Partial<OrchestratorState>> {
+  console.log("\n🧪 Orchestrator: Running testing review...");
 
-## Team Testing Conventions:
-{conventions}
-
-## Code Diff to Review:
-{diff}
-
-## Instructions:
-- Check if new code has corresponding tests
-- Verify test naming conventions
-- Look for proper test structure (arrange-act-assert, given-when-then)
-- Check for adequate edge case coverage
-- Verify mock/stub usage patterns
-- Look for test isolation issues
-- Check for proper async test handling
-- Only report issues that violate team testing standards
-
-{format_instructions}
-`);
-
-export async function reviewTesting(
-  diff: string,
-  filePath: string,
-  conventions: Convention[]
-): Promise<RawViolation[]> {
-  const llm = createLLM(config.agents.reviewer);
-
-  const testingConventions = conventions
-    .filter((c) => c.category === "testing")
-    .map((c) => `- ${c.rule}: ${c.description}`)
-    .join("\n");
-
-  const prompt = await TESTING_REVIEW_PROMPT.format({
-    conventions:
-      testingConventions || "No specific testing conventions defined.",
-    diff,
-    format_instructions: violationsParser.getFormatInstructions(),
-  });
-
-  try {
-    const response = await llm.invoke(prompt);
-    const parsed = await violationsParser.parse(response.content as string);
-
-    return parsed.violations.map((v) => ({
-      id: `testing-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      type: "testing" as const,
-      issue: v.issue,
-      file: filePath,
-      line: v.line,
-      code: v.code,
-      severity: v.severity,
-      conventionId: v.conventionId || "",
-    }));
-  } catch (error) {
-    console.error("Testing reviewer error:", error);
-    return [];
+  if (!state.prDiff) {
+    return {
+      status: "error",
+      errors: ["No PR diff available for testing review"],
+    };
   }
+
+  // 1️⃣ Read testing conventions from GLOBAL shared memory
+  const testingConventions = state.conventions.filter(
+    (c) => c.category === "testing"
+  );
+
+  if (testingConventions.length === 0) {
+    console.log("   ⚠️ No testing conventions found");
+    return {}; // do nothing
+  }
+
+  const llm = getModelForTask("reviewer", "google");
+  const newViolations: RawViolation[] = [];
+
+  // 2️⃣ Review each file in the PR
+  for (const file of state.prDiff.files) {
+    const fileName = file.path.split("/").pop() ?? "";
+    const isTestFile =
+      fileName.includes(".test.") || fileName.includes(".spec.");
+
+    console.log(
+      `   🧪 Reviewing ${isTestFile ? "TEST" : "SOURCE"} file: ${file.path}`
+    );
+
+    const systemPrompt = `
+You are an expert testing practices reviewer.
+
+${isTestFile ? `
+For TEST FILES:
+- Ensure describe/it structure
+- Ensure assertions exist
+- Check test naming clarity
+- Avoid shared mutable state
+- Proper beforeEach / afterEach usage
+` : `
+For SOURCE FILES:
+- Check if new logic lacks tests
+- Identify critical untested paths
+`}
+
+Team Testing Conventions:
+${testingConventions
+  .map(
+    (c) => `
+Rule: ${c.rule}
+Description: ${c.description}
+Tags: ${c.tags.join(", ")}
+Confidence: ${c.confidence}
+`
+  )
+  .join("\n---\n")}
+
+Return ONLY a JSON array of violations.
+Each violation must be:
+{
+  "issue": string,
+  "conventionId": string,
+  "file": string,
+  "line": number,
+  "code": string,
+  "severity": "error" | "warning" | "suggestion"
+}
+Return [] if none.
+`;
+
+    const userPrompt = `
+File path: ${file.path}
+
+Code diff:
+${file.diff}
+`;
+
+    try {
+      const response = await llm.invoke([
+        new SystemMessage(systemPrompt),
+        new HumanMessage(userPrompt),
+      ]);
+
+      const content = response.content.toString();
+      const match = content.match(/\[[\s\S]*\]/);
+
+      if (!match) continue;
+
+      const parsed = JSON.parse(match[0]);
+
+      for (const v of parsed) {
+        newViolations.push({
+          id: `testing-${Date.now()}-${Math.random()
+            .toString(36)
+            .slice(2)}`,
+          type: "testing",
+          ...v,
+        });
+      }
+    } catch (err) {
+      console.error(`   ❌ Testing review failed for ${file.path}`, err);
+    }
+  }
+
+  console.log(
+    `   ✅ Testing review found ${newViolations.length} violations`
+  );
+
+  // 3️⃣ WRITE BACK TO GLOBAL SHARED STATE
+  return {
+    violations: [...state.violations, ...newViolations],
+  };
 }

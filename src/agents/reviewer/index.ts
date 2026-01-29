@@ -1,7 +1,10 @@
 import { StateGraph, START, END, Annotation } from "@langchain/langgraph";
 import { getSupabaseKnowledgeStore } from "../../knowledge/supabase-store.js";
 import { config } from "../../config/index.js";
+
 import { structureReviewNode } from "./sub-reviewers/structure-reviewer.js";
+import { testingReviewNode } from "./sub-reviewers/testing-reviewer.js";
+
 import type {
   RawViolation,
   Convention,
@@ -31,7 +34,7 @@ const ReviewerOrchestratorAnnotation = Annotation.Root({
   }),
 
   violations: Annotation<RawViolation[]>({
-    reducer: (_, b) => b, // structure node returns merged violations
+    reducer: (_, b) => b, // sub-reviewers return merged violations
     default: () => [],
   }),
 
@@ -76,12 +79,18 @@ export function createReviewerGraph() {
   return new StateGraph(ReviewerOrchestratorAnnotation)
     .addNode("load_conventions", loadConventions)
 
-    // 👇 YOUR STRUCTURE REVIEWER RUNS AS A NODE
+    // 1️⃣ structure reviewer
     .addNode("structure_review", structureReviewNode)
 
+    // 2️⃣ testing reviewer
+    .addNode("testing_review", testingReviewNode)
+
+    // Flow
     .addEdge(START, "load_conventions")
     .addEdge("load_conventions", "structure_review")
-    .addEdge("structure_review", END)
+    .addEdge("structure_review", "testing_review")
+    .addEdge("testing_review", END)
+
     .compile();
 }
 

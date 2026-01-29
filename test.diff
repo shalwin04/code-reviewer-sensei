@@ -1,10 +1,6 @@
-diff --git a/src/components/User.tsx b/src/components/User.tsx
-index 123..456 100644
---- a/src/components/User.tsx
-+++ b/src/components/User.tsx
-@@ -1,3 +1,6 @@
-+import { userService } from "../services/user";
-+
- export function User() {
-   return <div>User</div>;
- }
++ export function calculateDiscount(price) {
++   if (price > 1000) {
++     return price * 0.8;
++   }
++   return price;
++ }

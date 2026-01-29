@@ -31,21 +31,28 @@ program
 program
   .command("review")
   .description("Review a pull request or local changes")
-  .option("-p, --pr <number>", "GitHub PR number to review")
   .option("-r, --repo <owner/repo>", "GitHub repository (e.g., owner/repo)")
+  .option("-p, --pr <number>", "GitHub PR number to review")
   .option("-f, --files <paths...>", "Local files to review")
   .option("-d, --diff <path>", "Path to a diff file")
   .option("--format <type>", "Output format: console, json, github", "console")
   .action(async (options) => {
     const spinner = ora("Starting review...").start();
 
-     if (options.repo) {
+    // ✅ FORCE repo into global config
+    if (!options.repo) {
+      spinner.fail("Repository is required for review");
+      console.error("Use: --repo owner/repo");
+      process.exit(1);
+    }
+
     config.repository.fullName = options.repo;
-  }
+    console.log("🔍 DEBUG repo set to:", config.repository.fullName);
+
     try {
       let prDiff;
 
-      if (options.pr && options.repo) {
+      if (options.pr) {
         spinner.text = `Fetching PR #${options.pr} from ${options.repo}...`;
         prDiff = await fetchPRDiff(options.repo, parseInt(options.pr));
       } else if (options.diff) {
@@ -88,7 +95,7 @@ program
           headBranch: "local",
         };
       } else {
-        spinner.fail("Please provide either --pr with --repo, --diff, or --files");
+        spinner.fail("Please provide --pr, --diff, or --files");
         process.exit(1);
       }
 
@@ -98,25 +105,25 @@ program
       spinner.succeed("Review complete!");
 
       if (result.status === "error") {
-        console.error(chalk.red("\nErrors occurred:"));
-        result.errors.forEach((e) => console.error(chalk.red(`  - ${e}`)));
+        console.error("\nErrors occurred:");
+        result.errors.forEach((e) => console.error(`  - ${e}`));
         process.exit(1);
       }
 
       if (options.format === "json") {
         console.log(JSON.stringify(result.finalOutput, null, 2));
       } else {
-        const output = formatForConsole(
-          result.finalOutput as FeedbackControllerStateUpdated
+        console.log(
+          formatForConsole(result.finalOutput as FeedbackControllerStateUpdated)
         );
-        console.log(output);
       }
     } catch (error) {
       spinner.fail("Review failed");
-      console.error(chalk.red(error));
+      console.error(error);
       process.exit(1);
     }
   });
+
 
 // ============================================
 // Learn Command
