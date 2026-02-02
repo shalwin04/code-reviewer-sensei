@@ -3,13 +3,10 @@ import { getSupabaseKnowledgeStore } from "../../knowledge/supabase-store.js";
 import { config } from "../../config/index.js";
 
 import { structureReviewNode } from "./sub-reviewers/structure-reviewer.js";
-<<<<<<< HEAD
 import { testingReviewNode } from "./sub-reviewers/testing-reviewer.js";
 
-=======
 import { namingReviewNode } from "./sub-reviewers/naming-reviewer.js";
 import { patternReviewNode } from "./sub-reviewers/pattern-reviewer.js";
->>>>>>> 8cb3ffe71540cacfd77690f870db43e1e5cf3f21
 import type {
   RawViolation,
   Convention,
@@ -39,11 +36,7 @@ const ReviewerOrchestratorAnnotation = Annotation.Root({
   }),
 
   violations: Annotation<RawViolation[]>({
-<<<<<<< HEAD
     reducer: (_, b) => b, // sub-reviewers return merged violations
-=======
-    reducer: (_, b) => b,
->>>>>>> 8cb3ffe71540cacfd77690f870db43e1e5cf3f21
     default: () => [],
   }),
 
@@ -75,11 +68,8 @@ async function loadConventions(state: any) {
 export function createReviewerGraph() {
   return new StateGraph(ReviewerOrchestratorAnnotation)
     .addNode("load_conventions", loadConventions)
-<<<<<<< HEAD
 
     // 1️⃣ structure reviewer
-=======
->>>>>>> 8cb3ffe71540cacfd77690f870db43e1e5cf3f21
     .addNode("structure_review", structureReviewNode)
     .addNode("naming_review", namingReviewNode)
     .addNode("pattern_review", patternReviewNode)
@@ -90,15 +80,10 @@ export function createReviewerGraph() {
     // Flow
     .addEdge(START, "load_conventions")
     .addEdge("load_conventions", "structure_review")
-<<<<<<< HEAD
-    .addEdge("structure_review", "testing_review")
-    .addEdge("testing_review", END)
-
-=======
     .addEdge("structure_review", "naming_review")
     .addEdge("naming_review", "pattern_review")
-    .addEdge("pattern_review", END)
->>>>>>> 8cb3ffe71540cacfd77690f870db43e1e5cf3f21
+    .addEdge("pattern_review", "testing_review")
+    .addEdge("testing_review",END)
     .compile();
 }
 

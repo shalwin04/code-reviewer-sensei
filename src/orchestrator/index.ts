@@ -362,16 +362,8 @@ export function createOrchestratorGraph() {
       learn_conventions: "learn_conventions",
     })
     .addEdge("load_conventions", "review_pr") // then review
-<<<<<<< HEAD
-    .addEdge("review_pr", "structure_review")
-
-    .addEdge("structure_review", "testing_review")
-
-    .addEdge("testing_review", "explain_violations")
-=======
     .addEdge("review_pr", "summarize_review")
     .addEdge("summarize_review", "explain_violations")
->>>>>>> 8cb3ffe71540cacfd77690f870db43e1e5cf3f21
     .addEdge("explain_violations", "prepare_feedback")
     .addEdge("prepare_feedback", END)
     .addEdge("answer_question", END)
