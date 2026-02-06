@@ -321,6 +321,7 @@ export interface PRWebhookPayload {
     title: string;
     head: { sha: string; ref: string };
     base: { ref: string };
+    user?: { login: string };
   };
   repository: {
     full_name: string;
