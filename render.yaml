@@ -1,0 +1,45 @@
+services:
+  - type: web
+    name: ai-code-reviewer-api
+    runtime: node
+    region: oregon
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm run start:web
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      # GitHub OAuth (required)
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      # Session secret (required)
+      - key: SESSION_SECRET
+        generateValue: true
+      # Supabase (required)
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      # AI Provider - Gemini (required)
+      - key: GOOGLE_API_KEY
+        sync: false
+      # Frontend URL for CORS
+      - key: FRONTEND_URL
+        sync: false
+      # GitHub App (optional - for automatic PR reviews)
+      - key: GITHUB_APP_ID
+        sync: false
+      - key: GITHUB_APP_PRIVATE_KEY
+        sync: false
+      - key: GITHUB_APP_CLIENT_ID
+        sync: false
+      - key: GITHUB_APP_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_APP_WEBHOOK_SECRET
+        sync: false
+      - key: GITHUB_APP_SLUG
+        value: ai-code-reviewer
