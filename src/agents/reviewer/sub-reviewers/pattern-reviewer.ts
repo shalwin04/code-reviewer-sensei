@@ -1,12 +1,19 @@
+// ============================================================================
+// Pattern Reviewer — GROUNDED, DIFF-BOUNDED, EDUCATIONAL
+//
+// Philosophy: Explain why THIS REPOSITORY cares, with enough detail for learning.
+// Output: Concise but helpful. 1-2 sentences per field so juniors understand.
+// ============================================================================
+
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
-import type { OrchestratorState } from "../../../orchestrator/index.js";
+import type { ReviewerGraphState } from "../state.js";
 import type { RawViolation } from "../../../types/index.js";
 import { getModelForTask } from "../../../utils/llm.js";
 
 export async function patternReviewNode(
-  state: OrchestratorState
-): Promise<Partial<OrchestratorState>> {
-  console.log("\n🧠 Orchestrator: Running pattern review...");
+  state: ReviewerGraphState
+): Promise<Partial<ReviewerGraphState>> {
+  console.log("\n🧠 Pattern Reviewer: Starting...");
 
   if (!state.prDiff) return {};
 
@@ -14,81 +21,98 @@ export async function patternReviewNode(
     (c) => c.category === "pattern"
   );
 
-  if (patternConventions.length === 0) return {};
+  if (patternConventions.length === 0) {
+    console.log("   ⏭️  No pattern conventions — skipping");
+    return {};
+  }
+
+  const assignedFiles =
+    state.routingPlan.length > 0
+      ? state.prDiff.files.filter((f) =>
+          state.routingPlan.some(
+            (r) => r.filePath === f.path && r.assignedReviewers.includes("pattern")
+          )
+        )
+      : state.prDiff.files;
+
+  if (assignedFiles.length === 0) {
+    console.log("   ⏭️  No files assigned");
+    return {};
+  }
+
+  console.log(`   Reviewing ${assignedFiles.length} file(s)`);
 
   const llm = getModelForTask("reviewer", "google");
   const violations: RawViolation[] = [];
 
-  for (const file of state.prDiff.files) {
-    const systemPrompt = `
-You are a STAFF ENGINEER reviewing architectural patterns.
+  for (const file of assignedFiles) {
+    console.log(`   🧠 ${file.path}`);
 
-Focus on:
-- API consistency
-- Latency implications
-- Coupling and long-term maintainability
-- Why the TEAM standardized this pattern
+    // Build conventions with examples for better grounding
+    const conventionsWithExamples = patternConventions
+      .map((c) => {
+        const example = c.examples?.[0];
+        return `- [${c.id}] ${c.rule}: ${c.description}${
+          example ? `\n  ✅ Good: ${example.good || "N/A"} | ❌ Bad: ${example.bad || "N/A"}` : ""
+        }`;
+      })
+      .join("\n");
 
-## Team Architectural Patterns:
-${patternConventions.map(c => `
-Rule: ${c.rule}
-Description: ${c.description}
-Tags: ${c.tags.join(", ")}
-Confidence: ${c.confidence}
-`).join("\n---\n")}
+    const systemPrompt = `You are a code reviewer checking coding patterns and practices.
 
-Return ONLY JSON array with:
-{
-  "issue": string,
-  "conventionId": string,
-  "file": string,
-  "line": number,
-  "code": string,
-  "severity": "error" | "warning" | "suggestion",
-  "reasoning": string,
-  "impact": string,
-  "recommendation": string
-}
-`;
+## THIS REPOSITORY'S PATTERN RULES (only use these):
+${conventionsWithExamples}
 
-    const userPrompt = `
-File: ${file.path}
-Code:
+## YOUR TASK:
+Find pattern violations in the diff. For each violation:
+- Only cite rules from above (NEVER invent generic programming advice)
+- Only flag code that appears in the diff
+- Focus: forbidden patterns, missing error handling, security issues
+- Explain clearly so a junior developer can understand and learn
+
+## OUTPUT FORMAT (JSON array only, no markdown):
+[{
+  "issue": "Clear description of the pattern problem",
+  "conventionId": "The ID from conventions above",
+  "file": "file path",
+  "line": line number,
+  "code": "the problematic code snippet",
+  "severity": "error|warning|suggestion",
+  "reasoning": "Why this matters to OUR team (1-2 sentences citing the specific convention)",
+  "impact": "What problems this causes: security risks, debugging difficulty, reliability issues (1-2 sentences)",
+  "recommendation": "Specific fix: use X pattern instead of Y"
+}]
+
+Return [] if no violations found.`;
+
+    const userPrompt = `File: ${file.path}
+Diff:
 ${file.diff}
 
-Detect architectural or API pattern deviations.
-Explain trade-offs (latency, coupling, scaling).
-`;
+Find pattern violations. Only use the repository's conventions listed above.`;
 
-    const res = await llm.invoke([
-      new SystemMessage(systemPrompt),
-      new HumanMessage(userPrompt),
-    ]);
+    try {
+      const res = await llm.invoke([
+        new SystemMessage(systemPrompt),
+        new HumanMessage(userPrompt),
+      ]);
 
-    const match = res.content.toString().match(/\[[\s\S]*\]/);
-    if (!match) continue;
+      const match = res.content.toString().match(/\[[\s\S]*\]/);
+      if (!match) continue;
 
-    const parsed = JSON.parse(match[0]);
-    for (const v of parsed) {
-      violations.push({
-        id: `pattern-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        type: "pattern",
-        ...v,
-      });
+      const parsed = JSON.parse(match[0]);
+      for (const v of parsed) {
+        violations.push({
+          id: `pattern-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          type: "pattern",
+          ...v,
+        });
+      }
+    } catch (err) {
+      console.error(`   ❌ Failed: ${file.path}`, err);
     }
   }
 
-    console.log(
-  state.violations.map(v => ({
-    type: v.type,
-    hasReasoning: !!v.reasoning,
-    hasImpact: !!v.impact,
-    hasRecommendation: !!v.recommendation,
-  }))
-);
-
-  return {
-    violations: [...state.violations, ...violations],
-    
-  };
+  console.log(`   ✅ Found ${violations.length} violations`);
+  return { violations: [...state.violations, ...violations] };
 }

@@ -17,6 +17,14 @@ import { config } from "../config/index.js";
 import { fetchPRDiff, fetchRepoCodeFiles, fetchRepoADRs } from "../integrations/github.js";
 import type { FeedbackControllerStateUpdated } from "../types/index.js";
 
+// Import enhanced tutor functions
+import {
+  startTutoringSession,
+  chat,
+  endTutoringSession,
+  getSessionInfo,
+} from "../agents/tutor/index.js";
+
 const program = new Command();
 
 program
@@ -253,13 +261,96 @@ program
   });
 
 // ============================================
+// NEW: Tutor Command - Interactive Conversation Mode
+// ============================================
+
+program
+  .command("tutor")
+  .description("Start an interactive tutoring session with the AI mentor")
+  .requiredOption("-r, --repo <owner/repo>", "Repository to learn about (e.g., owner/repo)")
+  .action(async (options) => {
+    console.log(chalk.cyan("\n🎓 AI Tutor - Interactive Learning Mode\n"));
+
+    // Initialize session
+    const spinner = ora("Initializing tutoring session...").start();
+    const initResult = await startTutoringSession(options.repo);
+    
+    if (!initResult.success) {
+      spinner.fail("Failed to start session");
+      console.error(chalk.red(`\n${initResult.message}`));
+      process.exit(1);
+    }
+
+    spinner.succeed("Session ready!");
+    console.log(chalk.white(`\n${initResult.message}\n`));
+    console.log(chalk.gray("Commands: 'exit' to quit, 'stats' for session info, 'help' for tips\n"));
+
+    // Conversation loop
+    let continueChat = true;
+    
+    while (continueChat) {
+      const { question } = await inquirer.prompt([
+        {
+          type: "input",
+          name: "question",
+          message: chalk.cyan("You:"),
+          validate: (input: string) => input.trim().length > 0 || "Please enter a question",
+        },
+      ]);
+
+      const trimmed = question.trim().toLowerCase();
+
+      // Handle special commands
+      if (trimmed === "exit" || trimmed === "quit") {
+        const summary = endTutoringSession(options.repo);
+        console.log(chalk.yellow(`\n${summary}\n`));
+        continueChat = false;
+        continue;
+      }
+
+      if (trimmed === "stats" || trimmed === "info") {
+        const sessionInfo = getSessionInfo(options.repo);
+        console.log(chalk.cyan("\n📊 Session Stats:"));
+        console.log(chalk.gray(`  Questions asked: ${sessionInfo.messageCount}`));
+        console.log(chalk.gray(`  Duration: ${Math.floor((sessionInfo.duration || 0) / 60000)} minutes`));
+        console.log(chalk.gray(`  Available conventions: ${sessionInfo.stats?.totalConventions}`));
+        console.log();
+        continue;
+      }
+
+      if (trimmed === "help") {
+        console.log(chalk.white("\n💡 Tips for asking questions:"));
+        console.log(chalk.gray("  • Ask about specific conventions: 'What's our error handling pattern?'"));
+        console.log(chalk.gray("  • Request examples: 'Show me how to structure API calls'"));
+        console.log(chalk.gray("  • Clarify patterns: 'Why do we use this folder structure?'"));
+        console.log(chalk.gray("  • Get context: 'What are the main patterns in this codebase?'"));
+        console.log();
+        continue;
+      }
+
+      // Get AI response
+      const thinkingSpinner = ora("Thinking...").start();
+      
+      try {
+        const answer = await chat(options.repo, question);
+        thinkingSpinner.succeed("Mentor:");
+        console.log(chalk.white(`\n${answer}\n`));
+      } catch (error) {
+        thinkingSpinner.fail("Error");
+        console.error(chalk.red(`\nFailed to get response: ${error}\n`));
+      }
+    }
+  });
+
+// ============================================
 // Ask Command
 // ============================================
 
 program
   .command("ask [question...]")
   .description("Ask a question about team conventions")
-  .action(async (questionParts: string[]) => {
+  .option("-r, --repo <owner/repo>", "Repository context (e.g., owner/repo)")
+  .action(async (questionParts: string[], options) => {
     let question: string;
 
     // If question provided as arguments, join them
@@ -281,10 +372,19 @@ program
     const spinner = ora("Thinking...").start();
 
     try {
-      const result = await orchestrateQuestion(question);
-
-      spinner.succeed("Here's what I found:");
-      console.log(chalk.white(`\n${result.finalOutput}\n`));
+      // Use repo from options if provided
+      if (options.repo) {
+        await startTutoringSession(options.repo);
+        const answer = await chat(options.repo, question);
+        spinner.succeed("Answer:");
+        console.log(chalk.white(`\n${answer}\n`));
+        endTutoringSession(options.repo);
+      } else {
+        // Fallback to existing orchestrator behavior
+        const result = await orchestrateQuestion(question);
+        spinner.succeed("Here's what I found:");
+        console.log(chalk.white(`\n${result.finalOutput}\n`));
+      }
     } catch (error) {
       spinner.fail("Failed to answer question");
       console.error(chalk.red(error));
@@ -311,6 +411,7 @@ program
           name: "action",
           message: "What would you like to do?",
           choices: [
+            { name: "💬 Start tutoring session (chat with AI)", value: "tutor" },
             { name: "📝 Review code", value: "review" },
             { name: "📚 Learn from codebase", value: "learn" },
             { name: "❓ Ask a question", value: "ask" },
@@ -323,6 +424,63 @@ program
       if (action === "exit") {
         console.log(chalk.cyan("\nGoodbye! 👋\n"));
         break;
+      }
+
+      if (action === "tutor") {
+        const { repoName } = await inquirer.prompt([
+          {
+            type: "input",
+            name: "repoName",
+            message: "Repository (owner/repo):",
+            validate: (input: string) => input.includes("/") || "Must be in format owner/repo",
+          },
+        ]);
+
+        console.log(chalk.gray("\nStarting tutoring session...\n"));
+        
+        // Start dedicated tutor mode
+        const initResult = await startTutoringSession(repoName);
+        
+        if (!initResult.success) {
+          console.error(chalk.red(`\n${initResult.message}\n`));
+          continue;
+        }
+
+        console.log(chalk.white(`${initResult.message}\n`));
+        console.log(chalk.gray("Type 'back' to return to main menu\n"));
+
+        // Conversation loop
+        let inTutorMode = true;
+        while (inTutorMode) {
+          const { question } = await inquirer.prompt([
+            {
+              type: "input",
+              name: "question",
+              message: chalk.cyan("You:"),
+            },
+          ]);
+
+          if (question.trim().toLowerCase() === "back") {
+            const summary = endTutoringSession(repoName);
+            console.log(chalk.yellow(`\n${summary}\n`));
+            inTutorMode = false;
+            break;
+          }
+
+          if (!question.trim()) continue;
+
+          const spinner = ora("Thinking...").start();
+          try {
+            const answer = await chat(repoName, question);
+            spinner.succeed("Mentor:");
+            console.log(chalk.white(`\n${answer}\n`));
+          } catch (error) {
+            spinner.fail("Error");
+            console.error(chalk.red(`\nFailed: ${error}\n`));
+          }
+        }
+        
+        continue;
       }
 
       if (action === "stats") {
@@ -358,7 +516,13 @@ program
       }
 
       if (action === "ask") {
-        const { question } = await inquirer.prompt([
+        const { repoName, question } = await inquirer.prompt([
+          {
+            type: "input",
+            name: "repoName",
+            message: "Repository (owner/repo):",
+            validate: (input: string) => input.includes("/") || "Must be in format owner/repo",
+          },
           {
             type: "input",
             name: "question",
@@ -369,9 +533,11 @@ program
         if (question) {
           const spinner = ora("Thinking...").start();
           try {
-            const result = await orchestrateQuestion(question);
+            await startTutoringSession(repoName);
+            const answer = await chat(repoName, question);
             spinner.succeed("Answer:");
-            console.log(chalk.white(`\n${result.finalOutput}\n`));
+            console.log(chalk.white(`\n${answer}\n`));
+            endTutoringSession(repoName);
           } catch (error) {
             spinner.fail("Failed");
             console.error(chalk.red(error));

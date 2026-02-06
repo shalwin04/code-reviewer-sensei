@@ -1,133 +1,118 @@
 // ============================================================================
-// GLOBAL TESTING REVIEWER NODE
-// Runs INSIDE the orchestrator graph
+// Testing Reviewer — GROUNDED, DIFF-BOUNDED, EDUCATIONAL
+//
+// Philosophy: Explain why THIS REPOSITORY cares, with enough detail for learning.
+// Output: Concise but helpful. 1-2 sentences per field so juniors understand.
 // ============================================================================
 
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
-import type { OrchestratorState } from "../../../orchestrator/index.js";
-import type { Convention, RawViolation } from "../../../types/index.js";
+import type { ReviewerGraphState } from "../state.js";
+import type { RawViolation } from "../../../types/index.js";
 import { getModelForTask } from "../../../utils/llm.js";
 
-// ============================================================================
-// Testing Review Node
-// ============================================================================
-
 export async function testingReviewNode(
-  state: OrchestratorState
-): Promise<Partial<OrchestratorState>> {
-  console.log("\n🧪 Orchestrator: Running testing review...");
+  state: ReviewerGraphState
+): Promise<Partial<ReviewerGraphState>> {
+  console.log("\n🧪 Testing Reviewer: Starting...");
 
-  if (!state.prDiff) {
-    return {
-      status: "error",
-      errors: ["No PR diff available for testing review"],
-    };
-  }
+  if (!state.prDiff) return {};
 
-  // 1️⃣ Read testing conventions from GLOBAL shared memory
   const testingConventions = state.conventions.filter(
     (c) => c.category === "testing"
   );
 
   if (testingConventions.length === 0) {
-    console.log("   ⚠️ No testing conventions found");
-    return {}; // do nothing
+    console.log("   ⏭️  No testing conventions — skipping");
+    return {};
   }
 
+  const assignedFiles =
+    state.routingPlan.length > 0
+      ? state.prDiff.files.filter((f) =>
+          state.routingPlan.some(
+            (r) => r.filePath === f.path && r.assignedReviewers.includes("testing")
+          )
+        )
+      : state.prDiff.files;
+
+  if (assignedFiles.length === 0) {
+    console.log("   ⏭️  No files assigned");
+    return {};
+  }
+
+  console.log(`   Reviewing ${assignedFiles.length} file(s)`);
+
   const llm = getModelForTask("reviewer", "google");
-  const newViolations: RawViolation[] = [];
+  const violations: RawViolation[] = [];
 
-  // 2️⃣ Review each file in the PR
-  for (const file of state.prDiff.files) {
-    const fileName = file.path.split("/").pop() ?? "";
-    const isTestFile =
-      fileName.includes(".test.") || fileName.includes(".spec.");
+  for (const file of assignedFiles) {
+    console.log(`   🧪 ${file.path}`);
 
-    console.log(
-      `   🧪 Reviewing ${isTestFile ? "TEST" : "SOURCE"} file: ${file.path}`
-    );
+    // Build conventions with examples for better grounding
+    const conventionsWithExamples = testingConventions
+      .map((c) => {
+        const example = c.examples?.[0];
+        return `- [${c.id}] ${c.rule}: ${c.description}${
+          example ? `\n  ✅ Good: ${example.good || "N/A"} | ❌ Bad: ${example.bad || "N/A"}` : ""
+        }`;
+      })
+      .join("\n");
 
-    const systemPrompt = `
-You are an expert testing practices reviewer.
+    const systemPrompt = `You are a code reviewer checking testing practices.
 
-${isTestFile ? `
-For TEST FILES:
-- Ensure describe/it structure
-- Ensure assertions exist
-- Check test naming clarity
-- Avoid shared mutable state
-- Proper beforeEach / afterEach usage
-` : `
-For SOURCE FILES:
-- Check if new logic lacks tests
-- Identify critical untested paths
-`}
+## THIS REPOSITORY'S TESTING RULES (only use these):
+${conventionsWithExamples}
 
-Team Testing Conventions:
-${testingConventions
-  .map(
-    (c) => `
-Rule: ${c.rule}
-Description: ${c.description}
-Tags: ${c.tags.join(", ")}
-Confidence: ${c.confidence}
-`
-  )
-  .join("\n---\n")}
+## YOUR TASK:
+Find testing violations in the diff. For each violation:
+- Only cite rules from above (NEVER invent generic testing advice)
+- Only flag code that appears in the diff
+- Focus: missing tests, shared state, flaky patterns
+- Explain clearly so a junior developer can understand and learn
 
-Return ONLY a JSON array of violations.
-Each violation must be:
-{
-  "issue": string,
-  "conventionId": string,
-  "file": string,
-  "line": number,
-  "code": string,
-  "severity": "error" | "warning" | "suggestion"
-}
-Return [] if none.
-`;
+## OUTPUT FORMAT (JSON array only, no markdown):
+[{
+  "issue": "Clear description of the testing problem",
+  "conventionId": "The ID from conventions above",
+  "file": "file path",
+  "line": line number,
+  "code": "the problematic test code or missing test indicator",
+  "severity": "error|warning|suggestion",
+  "reasoning": "Why this matters to OUR team (1-2 sentences citing the specific convention)",
+  "impact": "What problems this causes: flaky tests, missed regressions, coverage gaps (1-2 sentences)",
+  "recommendation": "Specific fix: add test for X, isolate state in beforeEach"
+}]
 
-    const userPrompt = `
-File path: ${file.path}
+Return [] if no violations found.`;
 
-Code diff:
+    const userPrompt = `File: ${file.path}
+Diff:
 ${file.diff}
-`;
+
+Find testing violations. Only use the repository's conventions listed above.`;
 
     try {
-      const response = await llm.invoke([
+      const res = await llm.invoke([
         new SystemMessage(systemPrompt),
         new HumanMessage(userPrompt),
       ]);
 
-      const content = response.content.toString();
-      const match = content.match(/\[[\s\S]*\]/);
-
+      const match = res.content.toString().match(/\[[\s\S]*\]/);
       if (!match) continue;
 
       const parsed = JSON.parse(match[0]);
-
       for (const v of parsed) {
-        newViolations.push({
-          id: `testing-${Date.now()}-${Math.random()
-            .toString(36)
-            .slice(2)}`,
+        violations.push({
+          id: `testing-${Date.now()}-${Math.random().toString(36).slice(2)}`,
           type: "testing",
           ...v,
         });
       }
     } catch (err) {
-      console.error(`   ❌ Testing review failed for ${file.path}`, err);
+      console.error(`   ❌ Failed: ${file.path}`, err);
     }
   }
 
-  console.log(
-    `   ✅ Testing review found ${newViolations.length} violations`
-  );
-
-  // 3️⃣ WRITE BACK TO GLOBAL SHARED STATE
-  return {
-    violations: [...state.violations, ...newViolations],
-  };
+  console.log(`   ✅ Found ${violations.length} violations`);
+  return { violations: [...state.violations, ...violations] };
 }

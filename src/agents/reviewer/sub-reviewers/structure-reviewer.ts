@@ -1,114 +1,120 @@
 // ============================================================================
-// GLOBAL STRUCTURE REVIEWER NODE
-// Runs INSIDE the orchestrator graph
+// Structure Reviewer — GROUNDED, DIFF-BOUNDED, EDUCATIONAL
+//
+// Philosophy: Explain why THIS REPOSITORY cares, with enough detail for learning.
+// Output: Concise but helpful. 1-2 sentences per field so juniors understand.
 // ============================================================================
 
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
-import type { OrchestratorState } from "../../../orchestrator/index.js";
-import type { Convention, RawViolation } from "../../../types/index.js";
+import type { ReviewerGraphState } from "../state.js";
+import type { RawViolation } from "../../../types/index.js";
 import { getModelForTask } from "../../../utils/llm.js";
 
-// ============================================================================
-// Structure Review Node
-// ============================================================================
-
 export async function structureReviewNode(
-  state: OrchestratorState
-): Promise<Partial<OrchestratorState>> {
-  console.log("\n🏗️ Orchestrator: Running structure review...");
+  state: ReviewerGraphState
+): Promise<Partial<ReviewerGraphState>> {
+  console.log("\n🏗️  Structure Reviewer: Starting...");
 
   if (!state.prDiff) {
-    return {
-      status: "error",
-      errors: ["No PR diff available for structure review"],
-    };
+    return { errors: ["No PR diff"] };
   }
 
-  // 1️⃣ Read conventions from GLOBAL shared memorys
   const structureConventions = state.conventions.filter(
     (c) => c.category === "structure"
   );
 
   if (structureConventions.length === 0) {
-    console.log("   ⚠️ No structure conventions found");
-    return {}; // do nothing, keep existing violations
+    console.log("   ⏭️  No structure conventions — skipping");
+    return {};
   }
 
+  const assignedFiles =
+    state.routingPlan.length > 0
+      ? state.prDiff.files.filter((f) =>
+          state.routingPlan.some(
+            (r) => r.filePath === f.path && r.assignedReviewers.includes("structure")
+          )
+        )
+      : state.prDiff.files;
+
+  if (assignedFiles.length === 0) {
+    console.log("   ⏭️  No files assigned");
+    return {};
+  }
+
+  console.log(`   Reviewing ${assignedFiles.length} file(s)`);
+
   const llm = getModelForTask("reviewer", "google");
-  const newViolations: RawViolation[] = [];
+  const violations: RawViolation[] = [];
 
-  // 2️⃣ Review each file in the PR
-  for (const file of state.prDiff.files) {
-    console.log(`   🏗️ Reviewing structure of ${file.path}`);
+  for (const file of assignedFiles) {
+    console.log(`   🏗️  ${file.path}`);
 
-    const systemPrompt = `
-You are an expert code structure reviewer.
+    // Build conventions with examples for better grounding
+    const conventionsWithExamples = structureConventions
+      .map((c) => {
+        const example = c.examples?.[0];
+        return `- [${c.id}] ${c.rule}: ${c.description}${
+          example ? `\n  ✅ Good: ${example.good || "N/A"} | ❌ Bad: ${example.bad || "N/A"}` : ""
+        }`;
+      })
+      .join("\n");
 
-## Team Structure Conventions:
-${structureConventions
-  .map(
-    (c) => `
-### ${c.rule}
-${c.description}
-Tags: ${c.tags.join(", ")}
-Confidence: ${c.confidence}
-`
-  )
-  .join("\n---\n")}
+    const systemPrompt = `You are a code reviewer checking code structure and layering.
 
-Return ONLY a JSON array of violations.
-Each violation must be:
-{
-  "issue": string,
-  "conventionId": string,
-  "file": string,
-  "line": number,
-  "code": string,
-  "severity": "error" | "warning" | "suggestion"
-}
-If none, return [].
-`;
+## THIS REPOSITORY'S STRUCTURE RULES (only use these):
+${conventionsWithExamples}
 
-    const userPrompt = `
-File path: ${file.path}
+## YOUR TASK:
+Find structure violations in the diff. For each violation:
+- Only cite rules from above (NEVER invent generic architecture advice)
+- Only flag code that appears in the diff
+- Focus: wrong folder, layer violation, bad imports
+- Explain clearly so a junior developer can understand and learn
 
-Code diff:
+## OUTPUT FORMAT (JSON array only, no markdown):
+[{
+  "issue": "Clear description of the structural problem",
+  "conventionId": "The ID from conventions above",
+  "file": "file path",
+  "line": line number,
+  "code": "the problematic import or placement",
+  "severity": "error|warning|suggestion",
+  "reasoning": "Why this matters to OUR team (1-2 sentences citing the specific convention)",
+  "impact": "What problems this causes: testing difficulties, tight coupling, maintenance burden (1-2 sentences)",
+  "recommendation": "Specific fix: move to X folder, import from Y instead"
+}]
+
+Return [] if no violations found.`;
+
+    const userPrompt = `File: ${file.path}
+Diff:
 ${file.diff}
 
-Analyze ONLY structural issues.
-`;
+Find structure/layering violations. Only use the repository's conventions listed above.`;
 
     try {
-      const response = await llm.invoke([
+      const res = await llm.invoke([
         new SystemMessage(systemPrompt),
         new HumanMessage(userPrompt),
       ]);
 
-      const content = response.content.toString();
-      const match = content.match(/\[[\s\S]*\]/);
-
+      const match = res.content.toString().match(/\[[\s\S]*\]/);
       if (!match) continue;
 
       const parsed = JSON.parse(match[0]);
-
       for (const v of parsed) {
-        newViolations.push({
-          id: `structure-${Date.now()}-${Math.random()
-            .toString(36)
-            .slice(2)}`,
+        violations.push({
+          id: `structure-${Date.now()}-${Math.random().toString(36).slice(2)}`,
           type: "structure",
           ...v,
         });
       }
     } catch (err) {
-      console.error(`   ❌ Structure review failed for ${file.path}`, err);
+      console.error(`   ❌ Failed: ${file.path}`, err);
     }
   }
 
-  console.log(`   ✅ Structure review found ${newViolations.length} violations`);
-
-  // 3️⃣ WRITE DIRECTLY TO GLOBAL SHARED MEMORY
-  return {
-    violations: [...state.violations, ...newViolations],
-  };
+  console.log(`   ✅ Found ${violations.length} violations`);
+  return { violations: [...state.violations, ...violations] };
 }

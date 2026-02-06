@@ -1,12 +1,19 @@
+// ============================================================================
+// Naming Reviewer — GROUNDED, DIFF-BOUNDED, EDUCATIONAL
+//
+// Philosophy: Explain why THIS REPOSITORY cares, with enough detail for learning.
+// Output: Concise but helpful. 1-2 sentences per field so juniors understand.
+// ============================================================================
+
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
-import type { OrchestratorState } from "../../../orchestrator/index.js";
+import type { ReviewerGraphState } from "../state.js";
 import type { RawViolation } from "../../../types/index.js";
 import { getModelForTask } from "../../../utils/llm.js";
 
 export async function namingReviewNode(
-  state: OrchestratorState
-): Promise<Partial<OrchestratorState>> {
-  console.log("\n🏷️ Orchestrator: Running naming review...");
+  state: ReviewerGraphState
+): Promise<Partial<ReviewerGraphState>> {
+  console.log("\n🏷️  Naming Reviewer: Starting...");
 
   if (!state.prDiff) return {};
 
@@ -14,81 +21,97 @@ export async function namingReviewNode(
     (c) => c.category === "naming"
   );
 
-  if (namingConventions.length === 0) return {};
+  if (namingConventions.length === 0) {
+    console.log("   ⏭️  No naming conventions — skipping");
+    return {};
+  }
+
+  const assignedFiles =
+    state.routingPlan.length > 0
+      ? state.prDiff.files.filter((f) =>
+          state.routingPlan.some(
+            (r) => r.filePath === f.path && r.assignedReviewers.includes("naming")
+          )
+        )
+      : state.prDiff.files;
+
+  if (assignedFiles.length === 0) {
+    console.log("   ⏭️  No files assigned");
+    return {};
+  }
+
+  console.log(`   Reviewing ${assignedFiles.length} file(s)`);
 
   const llm = getModelForTask("reviewer", "google");
   const violations: RawViolation[] = [];
 
-  for (const file of state.prDiff.files) {
-    const systemPrompt = `
-You are a senior engineer enforcing TEAM NAMING CONVENTIONS.
+  for (const file of assignedFiles) {
+    console.log(`   🏷️  ${file.path}`);
 
-Your job is NOT to restate rules.
-Your job is to explain:
-- WHY the team chose this naming convention
-- What breaks if consistency is lost
-- How it affects readability, reviews, and velocity
+    // Build conventions with examples for better grounding
+    const conventionsWithExamples = namingConventions
+      .map((c) => {
+        const example = c.examples?.[0];
+        return `- [${c.id}] ${c.rule}: ${c.description}${
+          example ? `\n  ✅ Good: ${example.good || "N/A"} | ❌ Bad: ${example.bad || "N/A"}` : ""
+        }`;
+      })
+      .join("\n");
 
-## Team Naming Conventions:
-${namingConventions.map(c => `
-Rule: ${c.rule}
-Description: ${c.description}
-Tags: ${c.tags.join(", ")}
-Confidence: ${c.confidence}
-`).join("\n---\n")}
+    const systemPrompt = `You are a code reviewer checking naming conventions.
 
-Return ONLY a JSON array.
-Each item must be:
-{
-  "issue": string,
-  "conventionId": string,
-  "file": string,
-  "line": number,
-  "code": string,
-  "severity": "error" | "warning" | "suggestion",
-  "reasoning": string,
-  "impact": string,
-  "recommendation": string
-}
-`;
+## THIS REPOSITORY'S NAMING RULES (only use these):
+${conventionsWithExamples}
 
-    const userPrompt = `
-File: ${file.path}
-Code:
+## YOUR TASK:
+Find naming violations in the diff. For each violation:
+- Only cite rules from above (NEVER invent generic programming rules)
+- Only flag code that appears in the diff
+- Explain clearly so a junior developer can understand and learn
+
+## OUTPUT FORMAT (JSON array only, no markdown):
+[{
+  "issue": "Clear description of the naming problem",
+  "conventionId": "The ID from conventions above (e.g., conv-naming-1)",
+  "file": "file path",
+  "line": line number,
+  "code": "the problematic identifier",
+  "severity": "error|warning|suggestion",
+  "reasoning": "Why this matters to OUR team (1-2 sentences citing the specific convention)",
+  "impact": "What problems this causes: code review friction, confusion, tooling issues (1-2 sentences)",
+  "recommendation": "Specific fix: rename X to Y following our convention"
+}]
+
+Return [] if no violations found.`;
+
+    const userPrompt = `File: ${file.path}
+Diff:
 ${file.diff}
 
-Identify naming inconsistencies ONLY.
-Explain why the TEAM naming style matters.
-`;
+Find naming violations. Only use the repository's conventions listed above.`;
 
-    const res = await llm.invoke([
-      new SystemMessage(systemPrompt),
-      new HumanMessage(userPrompt),
-    ]);
+    try {
+      const res = await llm.invoke([
+        new SystemMessage(systemPrompt),
+        new HumanMessage(userPrompt),
+      ]);
 
-    const match = res.content.toString().match(/\[[\s\S]*\]/);
-    if (!match) continue;
+      const match = res.content.toString().match(/\[[\s\S]*\]/);
+      if (!match) continue;
 
-    const parsed = JSON.parse(match[0]);
-    for (const v of parsed) {
-      violations.push({
-        id: `naming-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-        type: "naming",
-        ...v,
-      });
+      const parsed = JSON.parse(match[0]);
+      for (const v of parsed) {
+        violations.push({
+          id: `naming-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          type: "naming",
+          ...v,
+        });
+      }
+    } catch (err) {
+      console.error(`   ❌ Failed: ${file.path}`, err);
     }
   }
-    console.log(
-  state.violations.map(v => ({
-    type: v.type,
-    hasReasoning: !!v.reasoning,
-    hasImpact: !!v.impact,
-    hasRecommendation: !!v.recommendation,
-  }))
-);
 
-
-  return {
-    violations: [...state.violations, ...violations],
-  };
+  console.log(`   ✅ Found ${violations.length} violations`);
+  return { violations: [...state.violations, ...violations] };
 }

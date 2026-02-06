@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc:*)",
+      "Bash(npm run build:*)",
+      "Bash(npx vitest:*)",
+      "Bash(if not exist \"C:\\\\Users\\\\Suba Shree K B\\\\code-reviewer-sensei\\\\scripts\" mkdir \"C:\\\\Users\\\\Suba Shree K B\\\\code-reviewer-sensei\\\\scripts\")"
+    ]
+  }
+}

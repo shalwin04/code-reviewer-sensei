@@ -333,6 +333,18 @@ export interface PRFileDiff {
 
 
 // ============================================
+// Reviewer Routing Types
+// ============================================
+
+export type ReviewerCategory = "naming" | "structure" | "pattern" | "testing";
+
+export type FileRouting = {
+  filePath: string;
+  assignedReviewers: ReviewerCategory[];
+  reasoning: string;
+};
+
+// ============================================
 // Type Aliases (for backwards compatibility)
 // ============================================
 

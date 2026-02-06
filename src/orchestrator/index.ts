@@ -7,11 +7,6 @@ import {
   formatForConsole,
   formatForGitHub,
 } from "../agents/feedback-controller/index.js";
-import { testingReviewNode } from "../agents/reviewer/sub-reviewers/testing-reviewer.js";
-import { structureReviewNode } 
-  from "../agents/reviewer/sub-reviewers/structure-reviewer.js";
-
-
 import { getSupabaseKnowledgeStore } from "../knowledge/supabase-store.js";
 import { config } from "../config/index.js";
 import type {
@@ -144,15 +139,18 @@ async function reviewPRNode(
   }
 
   try {
-    // TODO: Friend's reviewer should accept conventions from state
-    // conventions are available at: state.conventions (Convention[] JSON)
-    const reviewResult = await reviewPR({
-      prNumber: state.prDiff.prNumber,
-      title: state.prDiff.title,
-      files: state.prDiff.files,
-      baseBranch: state.prDiff.baseBranch,
-      headBranch: state.prDiff.headBranch,
-    });
+    // Pass conventions from orchestrator state so the reviewer
+    // skips its own convention loading (already done here)
+    const reviewResult = await reviewPR(
+      {
+        prNumber: state.prDiff.prNumber,
+        title: state.prDiff.title,
+        files: state.prDiff.files,
+        baseBranch: state.prDiff.baseBranch,
+        headBranch: state.prDiff.headBranch,
+      },
+      state.conventions
+    );
 
     return {
       violations: reviewResult.violations,
@@ -178,7 +176,11 @@ async function explainViolationsNode(
   }
 
   try {
-    const tutorResult = await explainFeedback(state.violations);
+    // Pass conventions from state so tutor doesn't reload from Supabase
+    const tutorResult = await explainFeedback(
+      state.violations,
+      state.conventions
+    );
 
     return {
       explainedFeedback: tutorResult.explainedFeedback,
@@ -350,9 +352,6 @@ export function createOrchestratorGraph() {
     .addNode("review_pr", reviewPRNode)
     .addNode("explain_violations", explainViolationsNode)
     .addNode("prepare_feedback", prepareFeedbackNode)
-    .addNode("testing_review", testingReviewNode)
-.addNode("structure_review", structureReviewNode)
-
     .addNode("answer_question", answerQuestionNode)
     .addNode("learn_conventions", learnConventionsNode)
     .addNode("summarize_review", summarizeReviewNode)
@@ -390,6 +389,7 @@ export async function orchestrateReview(prDiff: PRDiffInput) {
     finalOutput: null,
     status: "pending",
     errors: [],
+    reviewSummary: null,
   });
 
   return result;
@@ -409,6 +409,7 @@ export async function orchestrateQuestion(question: string) {
     finalOutput: null,
     status: "pending",
     errors: [],
+    reviewSummary: null,
   });
 
   return result;
@@ -436,6 +437,7 @@ export async function orchestrateLearning(
     finalOutput: null,
     status: "pending",
     errors: [],
+    reviewSummary: null,
   });
 
   return result;
