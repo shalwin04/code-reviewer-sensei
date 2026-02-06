@@ -22,7 +22,6 @@ import {
   startTutoringSession,
   chat,
   endTutoringSession,
-  getSessionInfo,
 } from "../agents/tutor/index.js";
 
 const program = new Command();
