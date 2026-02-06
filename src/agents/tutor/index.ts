@@ -347,6 +347,8 @@ export async function chat(
         context.fileTree = overview.fileTree;
         context.files = overview.entryPoints;
       }
+    } else {
+      console.log("   No repository configured - answering without conventions");
     }
 
     // Try to get any conventions at all
