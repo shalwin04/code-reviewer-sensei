@@ -17,6 +17,14 @@ import { config } from "../config/index.js";
 import { fetchPRDiff, fetchRepoCodeFiles, fetchRepoADRs } from "../integrations/github.js";
 import type { FeedbackControllerStateUpdated } from "../types/index.js";
 
+// Import enhanced tutor functions
+import {
+  startTutoringSession,
+  chat,
+  endTutoringSession,
+  getSessionInfo,
+} from "../agents/tutor/index.js";
+
 const program = new Command();
 
 program
@@ -31,18 +39,28 @@ program
 program
   .command("review")
   .description("Review a pull request or local changes")
-  .option("-p, --pr <number>", "GitHub PR number to review")
   .option("-r, --repo <owner/repo>", "GitHub repository (e.g., owner/repo)")
+  .option("-p, --pr <number>", "GitHub PR number to review")
   .option("-f, --files <paths...>", "Local files to review")
   .option("-d, --diff <path>", "Path to a diff file")
   .option("--format <type>", "Output format: console, json, github", "console")
   .action(async (options) => {
     const spinner = ora("Starting review...").start();
 
+    // ✅ FORCE repo into global config
+    if (!options.repo) {
+      spinner.fail("Repository is required for review");
+      console.error("Use: --repo owner/repo");
+      process.exit(1);
+    }
+
+    config.repository.fullName = options.repo;
+    console.log("🔍 DEBUG repo set to:", config.repository.fullName);
+
     try {
       let prDiff;
 
-      if (options.pr && options.repo) {
+      if (options.pr) {
         spinner.text = `Fetching PR #${options.pr} from ${options.repo}...`;
         prDiff = await fetchPRDiff(options.repo, parseInt(options.pr));
       } else if (options.diff) {
@@ -85,7 +103,7 @@ program
           headBranch: "local",
         };
       } else {
-        spinner.fail("Please provide either --pr with --repo, --diff, or --files");
+        spinner.fail("Please provide --pr, --diff, or --files");
         process.exit(1);
       }
 
@@ -95,25 +113,25 @@ program
       spinner.succeed("Review complete!");
 
       if (result.status === "error") {
-        console.error(chalk.red("\nErrors occurred:"));
-        result.errors.forEach((e) => console.error(chalk.red(`  - ${e}`)));
+        console.error("\nErrors occurred:");
+        result.errors.forEach((e) => console.error(`  - ${e}`));
         process.exit(1);
       }
 
       if (options.format === "json") {
         console.log(JSON.stringify(result.finalOutput, null, 2));
       } else {
-        const output = formatForConsole(
-          result.finalOutput as FeedbackControllerStateUpdated
+        console.log(
+          formatForConsole(result.finalOutput as FeedbackControllerStateUpdated)
         );
-        console.log(output);
       }
     } catch (error) {
       spinner.fail("Review failed");
-      console.error(chalk.red(error));
+      console.error(error);
       process.exit(1);
     }
   });
+
 
 // ============================================
 // Learn Command
@@ -457,6 +475,7 @@ program
           name: "action",
           message: "What would you like to do?",
           choices: [
+            { name: "💬 Start tutoring session (chat with AI)", value: "tutor" },
             { name: "📝 Review code", value: "review" },
             { name: "📚 Learn from codebase", value: "learn" },
             { name: "❓ Ask a question", value: "ask" },
@@ -469,6 +488,63 @@ program
       if (action === "exit") {
         console.log(chalk.cyan("\nGoodbye! 👋\n"));
         break;
+      }
+
+      if (action === "tutor") {
+        const { repoName } = await inquirer.prompt([
+          {
+            type: "input",
+            name: "repoName",
+            message: "Repository (owner/repo):",
+            validate: (input: string) => input.includes("/") || "Must be in format owner/repo",
+          },
+        ]);
+
+        console.log(chalk.gray("\nStarting tutoring session...\n"));
+        
+        // Start dedicated tutor mode
+        const initResult = await startTutoringSession(repoName);
+        
+        if (!initResult.success) {
+          console.error(chalk.red(`\n${initResult.message}\n`));
+          continue;
+        }
+
+        console.log(chalk.white(`${initResult.message}\n`));
+        console.log(chalk.gray("Type 'back' to return to main menu\n"));
+
+        // Conversation loop
+        let inTutorMode = true;
+        while (inTutorMode) {
+          const { question } = await inquirer.prompt([
+            {
+              type: "input",
+              name: "question",
+              message: chalk.cyan("You:"),
+            },
+          ]);
+
+          if (question.trim().toLowerCase() === "back") {
+            const summary = endTutoringSession(repoName);
+            console.log(chalk.yellow(`\n${summary}\n`));
+            inTutorMode = false;
+            break;
+          }
+
+          if (!question.trim()) continue;
+
+          const spinner = ora("Thinking...").start();
+          try {
+            const answer = await chat(repoName, question);
+            spinner.succeed("Mentor:");
+            console.log(chalk.white(`\n${answer}\n`));
+          } catch (error) {
+            spinner.fail("Error");
+            console.error(chalk.red(`\nFailed: ${error}\n`));
+          }
+        }
+        
+        continue;
       }
 
       if (action === "stats") {
@@ -504,7 +580,13 @@ program
       }
 
       if (action === "ask") {
-        const { question } = await inquirer.prompt([
+        const { repoName, question } = await inquirer.prompt([
+          {
+            type: "input",
+            name: "repoName",
+            message: "Repository (owner/repo):",
+            validate: (input: string) => input.includes("/") || "Must be in format owner/repo",
+          },
           {
             type: "input",
             name: "question",
@@ -515,9 +597,11 @@ program
         if (question) {
           const spinner = ora("Thinking...").start();
           try {
-            const result = await orchestrateQuestion(question);
+            await startTutoringSession(repoName);
+            const answer = await chat(repoName, question);
             spinner.succeed("Answer:");
-            console.log(chalk.white(`\n${result.finalOutput}\n`));
+            console.log(chalk.white(`\n${answer}\n`));
+            endTutoringSession(repoName);
           } catch (error) {
             spinner.fail("Failed");
             console.error(chalk.red(error));

@@ -261,6 +261,10 @@ export type RawViolation = {
   line: number;
   code?: string;
   severity: ViolationSeverity;
+  // 🧠 Agent-owned reasoning (OPTIONAL for backward compatibility)
+  reasoning?: string;        // WHY the team does this
+  impact?: string;           // What breaks if ignored
+  recommendation?: string;   // What to do instead
 };
 
 
@@ -327,6 +331,18 @@ export interface PRFileDiff {
 }
 
 
+
+// ============================================
+// Reviewer Routing Types
+// ============================================
+
+export type ReviewerCategory = "naming" | "structure" | "pattern" | "testing";
+
+export type FileRouting = {
+  filePath: string;
+  assignedReviewers: ReviewerCategory[];
+  reasoning: string;
+};
 
 // ============================================
 // Type Aliases (for backwards compatibility)

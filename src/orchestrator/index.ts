@@ -67,9 +67,14 @@ const OrchestratorAnnotation = Annotation.Root({
     reducer: (a, b) => [...a, ...b],
     default: () => [],
   }),
+  reviewSummary: Annotation<string | null>({
+  reducer: (_, b) => b,
+  default: () => null,
+}),
+
 });
 
-type OrchestratorState = typeof OrchestratorAnnotation.State;
+export type OrchestratorState = typeof OrchestratorAnnotation.State;
 
 // ============================================
 // Router Node
@@ -134,15 +139,18 @@ async function reviewPRNode(
   }
 
   try {
-    // TODO: Friend's reviewer should accept conventions from state
-    // conventions are available at: state.conventions (Convention[] JSON)
-    const reviewResult = await reviewPR({
-      prNumber: state.prDiff.prNumber,
-      title: state.prDiff.title,
-      files: state.prDiff.files,
-      baseBranch: state.prDiff.baseBranch,
-      headBranch: state.prDiff.headBranch,
-    });
+    // Pass conventions from orchestrator state so the reviewer
+    // skips its own convention loading (already done here)
+    const reviewResult = await reviewPR(
+      {
+        prNumber: state.prDiff.prNumber,
+        title: state.prDiff.title,
+        files: state.prDiff.files,
+        baseBranch: state.prDiff.baseBranch,
+        headBranch: state.prDiff.headBranch,
+      },
+      state.conventions
+    );
 
     return {
       violations: reviewResult.violations,
@@ -168,7 +176,11 @@ async function explainViolationsNode(
   }
 
   try {
-    const tutorResult = await explainFeedback(state.violations);
+    // Pass conventions from state so tutor doesn't reload from Supabase
+    const tutorResult = await explainFeedback(
+      state.violations,
+      state.conventions
+    );
 
     return {
       explainedFeedback: tutorResult.explainedFeedback,
@@ -179,6 +191,58 @@ async function explainViolationsNode(
       errors: [`Explanation failed: ${error}`],
     };
   }
+}
+async function summarizeReviewNode(
+  state: OrchestratorState
+): Promise<Partial<OrchestratorState>> {
+  console.log("\n🧑‍🏫 Orchestrator: Summarizing PR review...");
+
+  if (state.violations.length === 0) {
+    return {
+      reviewSummary: "No issues found. This PR looks good to merge.",
+    };
+  }
+
+  // Only trust agentic violations
+  const agentic = state.violations.filter(
+    v => v.reasoning && v.impact && v.recommendation
+  );
+
+  if (agentic.length === 0) {
+    return {
+      reviewSummary:
+        "Issues were detected, but they lack sufficient reasoning to explain clearly.",
+    };
+  }
+
+  const llm = await import("../utils/llm.js").then(m =>
+    m.getModelForTask("reviewer", "google")
+  );
+
+  const prompt = `
+You are a senior engineer explaining THIS pull request to a junior developer.
+
+Rules:
+- Do NOT explain team rules
+- Do NOT restate conventions
+- Explain what is wrong in THIS PR
+- Be encouraging and human
+
+Violations:
+${agentic.map(v => `
+Type: ${v.type}
+Issue: ${v.issue}
+Impact: ${v.impact}
+`).join("\n---\n")}
+
+Write a 5–7 sentence summary.
+`;
+
+  const res = await llm.invoke(prompt);
+
+  return {
+    reviewSummary: res.content.toString().trim(),
+  };
 }
 
 async function prepareFeedbackNode(
@@ -290,13 +354,15 @@ export function createOrchestratorGraph() {
     .addNode("prepare_feedback", prepareFeedbackNode)
     .addNode("answer_question", answerQuestionNode)
     .addNode("learn_conventions", learnConventionsNode)
+    .addNode("summarize_review", summarizeReviewNode)
     .addConditionalEdges(START, routeTrigger, {
       review_pr: "load_conventions",         // load conventions first
       answer_question: "answer_question",
       learn_conventions: "learn_conventions",
     })
     .addEdge("load_conventions", "review_pr") // then review
-    .addEdge("review_pr", "explain_violations")
+    .addEdge("review_pr", "summarize_review")
+    .addEdge("summarize_review", "explain_violations")
     .addEdge("explain_violations", "prepare_feedback")
     .addEdge("prepare_feedback", END)
     .addEdge("answer_question", END)
@@ -323,6 +389,7 @@ export async function orchestrateReview(prDiff: PRDiffInput) {
     finalOutput: null,
     status: "pending",
     errors: [],
+    reviewSummary: null,
   });
 
   return result;
@@ -342,6 +409,7 @@ export async function orchestrateQuestion(question: string) {
     finalOutput: null,
     status: "pending",
     errors: [],
+    reviewSummary: null,
   });
 
   return result;
@@ -369,6 +437,7 @@ export async function orchestrateLearning(
     finalOutput: null,
     status: "pending",
     errors: [],
+    reviewSummary: null,
   });
 
   return result;

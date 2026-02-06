@@ -1,80 +1,120 @@
-import { PromptTemplate } from "@langchain/core/prompts";
-import { StructuredOutputParser } from "@langchain/core/output_parsers";
-import { z } from "zod";
-import { createLLM } from "../../../utils/llm.js";
-import { config } from "../../../config/index.js";
-import type { RawViolation, Convention } from "../../../types/index.js";
+// ============================================================================
+// Structure Reviewer — GROUNDED, DIFF-BOUNDED, EDUCATIONAL
+//
+// Philosophy: Explain why THIS REPOSITORY cares, with enough detail for learning.
+// Output: Concise but helpful. 1-2 sentences per field so juniors understand.
+// ============================================================================
 
-const ViolationsSchema = z.object({
-  violations: z.array(
-    z.object({
-      line: z.number(),
-      file: z.string(),
-      code: z.string().describe("The problematic code snippet"),
-      issue: z.string().describe("Brief description of the structural issue"),
-      severity: z.enum(["error", "warning", "suggestion"]),
-      conventionId: z.string().optional(),
-    })
-  ),
-});
+import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import type { ReviewerGraphState } from "../state.js";
+import type { RawViolation } from "../../../types/index.js";
+import { getModelForTask } from "../../../utils/llm.js";
 
-const violationsParser = StructuredOutputParser.fromZodSchema(ViolationsSchema);
+export async function structureReviewNode(
+  state: ReviewerGraphState
+): Promise<Partial<ReviewerGraphState>> {
+  console.log("\n🏗️  Structure Reviewer: Starting...");
 
-const STRUCTURE_REVIEW_PROMPT = PromptTemplate.fromTemplate(`
-You are a specialized code structure reviewer. Your ONLY job is to detect structural issues.
-
-## Team Structure Conventions:
-{conventions}
-
-## Code Diff to Review:
-{diff}
-
-## Instructions:
-- Check file organization and module structure
-- Look for proper separation of concerns
-- Check import/export patterns
-- Verify component/class organization
-- Look for proper layering (controllers, services, repositories, etc.)
-- Only report actual violations against team conventions
-
-{format_instructions}
-`);
-
-export async function reviewStructure(
-  diff: string,
-  filePath: string,
-  conventions: Convention[]
-): Promise<RawViolation[]> {
-  const llm = createLLM(config.agents.reviewer);
-
-  const structureConventions = conventions
-    .filter((c) => c.category === "structure")
-    .map((c) => `- ${c.rule}: ${c.description}`)
-    .join("\n");
-
-  const prompt = await STRUCTURE_REVIEW_PROMPT.format({
-    conventions:
-      structureConventions || "No specific structure conventions defined.",
-    diff,
-    format_instructions: violationsParser.getFormatInstructions(),
-  });
-
-  try {
-    const response = await llm.invoke(prompt);
-    const parsed = await violationsParser.parse(response.content as string);
-
-    return parsed.violations.map((v) => ({
-      id: `structure-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      type: "structure" as const,
-      issue: v.issue,
-      file: filePath,
-      line: v.line,
-      code: v.code,
-      severity: v.severity,
-      conventionId: v.conventionId || "",
-    }));
-  } catch (error) {
-    console.error("Structure reviewer error:", error);
-    return [];
+  if (!state.prDiff) {
+    return { errors: ["No PR diff"] };
   }
+
+  const structureConventions = state.conventions.filter(
+    (c) => c.category === "structure"
+  );
+
+  if (structureConventions.length === 0) {
+    console.log("   ⏭️  No structure conventions — skipping");
+    return {};
+  }
+
+  const assignedFiles =
+    state.routingPlan.length > 0
+      ? state.prDiff.files.filter((f) =>
+          state.routingPlan.some(
+            (r) => r.filePath === f.path && r.assignedReviewers.includes("structure")
+          )
+        )
+      : state.prDiff.files;
+
+  if (assignedFiles.length === 0) {
+    console.log("   ⏭️  No files assigned");
+    return {};
+  }
+
+  console.log(`   Reviewing ${assignedFiles.length} file(s)`);
+
+  const llm = getModelForTask("reviewer", "google");
+  const violations: RawViolation[] = [];
+
+  for (const file of assignedFiles) {
+    console.log(`   🏗️  ${file.path}`);
+
+    // Build conventions with examples for better grounding
+    const conventionsWithExamples = structureConventions
+      .map((c) => {
+        const example = c.examples?.[0];
+        return `- [${c.id}] ${c.rule}: ${c.description}${
+          example ? `\n  ✅ Good: ${example.good || "N/A"} | ❌ Bad: ${example.bad || "N/A"}` : ""
+        }`;
+      })
+      .join("\n");
+
+    const systemPrompt = `You are a code reviewer checking code structure and layering.
+
+## THIS REPOSITORY'S STRUCTURE RULES (only use these):
+${conventionsWithExamples}
+
+## YOUR TASK:
+Find structure violations in the diff. For each violation:
+- Only cite rules from above (NEVER invent generic architecture advice)
+- Only flag code that appears in the diff
+- Focus: wrong folder, layer violation, bad imports
+- Explain clearly so a junior developer can understand and learn
+
+## OUTPUT FORMAT (JSON array only, no markdown):
+[{
+  "issue": "Clear description of the structural problem",
+  "conventionId": "The ID from conventions above",
+  "file": "file path",
+  "line": line number,
+  "code": "the problematic import or placement",
+  "severity": "error|warning|suggestion",
+  "reasoning": "Why this matters to OUR team (1-2 sentences citing the specific convention)",
+  "impact": "What problems this causes: testing difficulties, tight coupling, maintenance burden (1-2 sentences)",
+  "recommendation": "Specific fix: move to X folder, import from Y instead"
+}]
+
+Return [] if no violations found.`;
+
+    const userPrompt = `File: ${file.path}
+Diff:
+${file.diff}
+
+Find structure/layering violations. Only use the repository's conventions listed above.`;
+
+    try {
+      const res = await llm.invoke([
+        new SystemMessage(systemPrompt),
+        new HumanMessage(userPrompt),
+      ]);
+
+      const match = res.content.toString().match(/\[[\s\S]*\]/);
+      if (!match) continue;
+
+      const parsed = JSON.parse(match[0]);
+      for (const v of parsed) {
+        violations.push({
+          id: `structure-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          type: "structure",
+          ...v,
+        });
+      }
+    } catch (err) {
+      console.error(`   ❌ Failed: ${file.path}`, err);
+    }
+  }
+
+  console.log(`   ✅ Found ${violations.length} violations`);
+  return { violations: [...state.violations, ...violations] };
 }

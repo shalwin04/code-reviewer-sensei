@@ -1,81 +1,117 @@
-import type { Convention, RawViolation } from "../../../types/index.js";
+// ============================================================================
+// Naming Reviewer — GROUNDED, DIFF-BOUNDED, EDUCATIONAL
+//
+// Philosophy: Explain why THIS REPOSITORY cares, with enough detail for learning.
+// Output: Concise but helpful. 1-2 sentences per field so juniors understand.
+// ============================================================================
 
-/**
- * Naming Reviewer
- * Checks file names, variable names, function names
- */
-export async function reviewNaming(
-  diff: string,
-  filePath: string,
-  conventions: Convention[]
-): Promise<RawViolation[]> {
-  const violations: RawViolation[] = [];
+import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import type { ReviewerGraphState } from "../state.js";
+import type { RawViolation } from "../../../types/index.js";
+import { getModelForTask } from "../../../utils/llm.js";
 
-  // Only naming conventions
-  const namingConventions = conventions.filter(
+export async function namingReviewNode(
+  state: ReviewerGraphState
+): Promise<Partial<ReviewerGraphState>> {
+  console.log("\n🏷️  Naming Reviewer: Starting...");
+
+  if (!state.prDiff) return {};
+
+  const namingConventions = state.conventions.filter(
     (c) => c.category === "naming"
   );
 
   if (namingConventions.length === 0) {
-    return violations;
+    console.log("   ⏭️  No naming conventions — skipping");
+    return {};
   }
 
-  // ---------- FILE NAME CHECK ----------
-  for (const conv of namingConventions) {
-    if (conv.rule.toLowerCase().includes("pascalcase")) {
-      const fileName = filePath.split("/").pop() ?? "";
+  const assignedFiles =
+    state.routingPlan.length > 0
+      ? state.prDiff.files.filter((f) =>
+          state.routingPlan.some(
+            (r) => r.filePath === f.path && r.assignedReviewers.includes("naming")
+          )
+        )
+      : state.prDiff.files;
 
-      const pascalCaseRegex = /^[A-Z][a-zA-Z0-9]*\.(ts|tsx)$/;
+  if (assignedFiles.length === 0) {
+    console.log("   ⏭️  No files assigned");
+    return {};
+  }
 
-      if (!pascalCaseRegex.test(fileName)) {
+  console.log(`   Reviewing ${assignedFiles.length} file(s)`);
+
+  const llm = getModelForTask("reviewer", "google");
+  const violations: RawViolation[] = [];
+
+  for (const file of assignedFiles) {
+    console.log(`   🏷️  ${file.path}`);
+
+    // Build conventions with examples for better grounding
+    const conventionsWithExamples = namingConventions
+      .map((c) => {
+        const example = c.examples?.[0];
+        return `- [${c.id}] ${c.rule}: ${c.description}${
+          example ? `\n  ✅ Good: ${example.good || "N/A"} | ❌ Bad: ${example.bad || "N/A"}` : ""
+        }`;
+      })
+      .join("\n");
+
+    const systemPrompt = `You are a code reviewer checking naming conventions.
+
+## THIS REPOSITORY'S NAMING RULES (only use these):
+${conventionsWithExamples}
+
+## YOUR TASK:
+Find naming violations in the diff. For each violation:
+- Only cite rules from above (NEVER invent generic programming rules)
+- Only flag code that appears in the diff
+- Explain clearly so a junior developer can understand and learn
+
+## OUTPUT FORMAT (JSON array only, no markdown):
+[{
+  "issue": "Clear description of the naming problem",
+  "conventionId": "The ID from conventions above (e.g., conv-naming-1)",
+  "file": "file path",
+  "line": line number,
+  "code": "the problematic identifier",
+  "severity": "error|warning|suggestion",
+  "reasoning": "Why this matters to OUR team (1-2 sentences citing the specific convention)",
+  "impact": "What problems this causes: code review friction, confusion, tooling issues (1-2 sentences)",
+  "recommendation": "Specific fix: rename X to Y following our convention"
+}]
+
+Return [] if no violations found.`;
+
+    const userPrompt = `File: ${file.path}
+Diff:
+${file.diff}
+
+Find naming violations. Only use the repository's conventions listed above.`;
+
+    try {
+      const res = await llm.invoke([
+        new SystemMessage(systemPrompt),
+        new HumanMessage(userPrompt),
+      ]);
+
+      const match = res.content.toString().match(/\[[\s\S]*\]/);
+      if (!match) continue;
+
+      const parsed = JSON.parse(match[0]);
+      for (const v of parsed) {
         violations.push({
-          id: `naming-file-${Date.now()}`,
+          id: `naming-${Date.now()}-${Math.random().toString(36).slice(2)}`,
           type: "naming",
-          issue: conv.rule,
-          conventionId: conv.id,
-          file: filePath,
-          line: 1,
-          code: fileName,
-          severity: "warning",
+          ...v,
         });
       }
+    } catch (err) {
+      console.error(`   ❌ Failed: ${file.path}`, err);
     }
   }
 
-  // ---------- VARIABLE / FUNCTION CHECK ----------
-  const lines = diff.split("\n");
-
-  lines.forEach((line, index) => {
-    const trimmed = line.trim();
-
-    // match: const my_var = ...
-    const variableMatch = trimmed.match(
-      /(const|let|var)\s+([a-zA-Z0-9_]+)/
-    );
-
-    if (variableMatch) {
-      const variableName = variableMatch[2];
-
-      for (const conv of namingConventions) {
-        if (conv.rule.toLowerCase().includes("camelcase")) {
-          const camelCaseRegex = /^[a-z][a-zA-Z0-9]*$/;
-
-          if (!camelCaseRegex.test(variableName)) {
-            violations.push({
-              id: `naming-var-${Date.now()}-${index}`,
-              type: "naming",
-              issue: `Variable "${variableName}" should be camelCase`,
-              conventionId: conv.id,
-              file: filePath,
-              line: index + 1,
-              code: line,
-              severity: "warning",
-            });
-          }
-        }
-      }
-    }
-  });
-
-  return violations;
+  console.log(`   ✅ Found ${violations.length} violations`);
+  return { violations: [...state.violations, ...violations] };
 }
