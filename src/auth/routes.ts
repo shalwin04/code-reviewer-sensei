@@ -21,16 +21,73 @@ declare global {
 // Auth Middleware
 // ============================================
 
+// Helper to extract and validate Bearer token
+async function validateBearerToken(req: Request): Promise<SessionUser | null> {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return null;
+  }
+
+  const accessToken = authHeader.substring(7);
+  if (!accessToken) {
+    return null;
+  }
+
+  try {
+    // Validate the token by making a request to GitHub
+    const { Octokit } = await import("octokit");
+    const octokit = new Octokit({ auth: accessToken });
+    const { data: githubUser } = await octokit.rest.users.getAuthenticated();
+
+    return {
+      id: githubUser.id.toString(),
+      githubId: githubUser.id.toString(),
+      username: githubUser.login,
+      displayName: githubUser.name || githubUser.login,
+      email: githubUser.email || null,
+      avatarUrl: githubUser.avatar_url,
+      accessToken,
+    };
+  } catch (error) {
+    console.error("Failed to validate Bearer token:", error);
+    return null;
+  }
+}
+
 export function requireAuth(req: Request, res: Response, next: NextFunction) {
+  // First check session-based auth
   if (req.isAuthenticated() && req.user) {
     return next();
   }
-  res.status(401).json({ error: "Unauthorized", message: "Please log in to continue" });
+
+  // Then check Bearer token auth
+  validateBearerToken(req).then((user) => {
+    if (user) {
+      // Attach user to request
+      (req as any).user = user;
+      return next();
+    }
+    res.status(401).json({ error: "Unauthorized", message: "Please log in to continue" });
+  }).catch(() => {
+    res.status(401).json({ error: "Unauthorized", message: "Please log in to continue" });
+  });
 }
 
-export function optionalAuth(_req: Request, _res: Response, next: NextFunction) {
-  // Just continue, user may or may not be authenticated
-  next();
+export function optionalAuth(req: Request, _res: Response, next: NextFunction) {
+  // First check session-based auth
+  if (req.isAuthenticated() && req.user) {
+    return next();
+  }
+
+  // Then check Bearer token auth
+  validateBearerToken(req).then((user) => {
+    if (user) {
+      (req as any).user = user;
+    }
+    next();
+  }).catch(() => {
+    next();
+  });
 }
 
 // ============================================
@@ -68,10 +125,28 @@ router.get(
   passport.authenticate("github", {
     failureRedirect: "/auth/failure",
   }),
-  (_req: Request, res: Response) => {
-    // Successful authentication, redirect to frontend
+  (req: Request, res: Response) => {
+    // Successful authentication, redirect to frontend with user data
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3001";
-    res.redirect(`${frontendUrl}/dashboard?auth=success`);
+    const user = req.user;
+
+    if (user) {
+      // Encode user data for URL (for cross-domain session workaround)
+      const userData = Buffer.from(
+        JSON.stringify({
+          id: user.id,
+          username: user.username,
+          displayName: user.displayName,
+          email: user.email,
+          avatarUrl: user.avatarUrl,
+          accessToken: user.accessToken,
+        })
+      ).toString("base64");
+
+      res.redirect(`${frontendUrl}/auth/callback?data=${encodeURIComponent(userData)}`);
+    } else {
+      res.redirect(`${frontendUrl}/dashboard?auth=success`);
+    }
   }
 );
 
@@ -93,7 +168,7 @@ router.post("/logout", (req: Request, res: Response) => {
         res.status(500).json({ error: "Failed to destroy session" });
         return;
       }
-      res.clearCookie("connect.sid");
+      res.clearCookie("ai-reviewer.sid");
       res.json({ success: true, message: "Logged out successfully" });
     });
   });

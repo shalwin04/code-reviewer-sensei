@@ -52,10 +52,34 @@ const app = express();
 const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3001";
 app.use(
   cors({
-    origin: [frontendUrl, "http://localhost:3000", "http://localhost:3001"],
+    origin: function (origin, callback) {
+      // Allow requests with no origin (mobile apps, curl, etc.)
+      if (!origin) return callback(null, true);
+
+      const allowedOrigins = [
+        frontendUrl,
+        "http://localhost:3000",
+        "http://localhost:3001",
+        // Allow any vercel.app subdomain
+        /\.vercel\.app$/,
+      ];
+
+      const isAllowed = allowedOrigins.some((allowed) => {
+        if (allowed instanceof RegExp) return allowed.test(origin);
+        return allowed === origin;
+      });
+
+      if (isAllowed) {
+        callback(null, true);
+      } else {
+        console.log("CORS blocked origin:", origin);
+        callback(null, true); // Allow anyway for debugging
+      }
+    },
     credentials: true,
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    allowedHeaders: ["Content-Type", "Authorization", "Cookie"],
+    exposedHeaders: ["Set-Cookie"],
   })
 );
 
