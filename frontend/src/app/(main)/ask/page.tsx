@@ -108,13 +108,15 @@ export default function AskPage() {
           </p>
         </div>
       ) : (
-        <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
+        <div className="grid gap-6 lg:grid-cols-[1fr_300px] min-w-0">
           {/* Chat Interface */}
-          <ChatInterface
-            messages={messages}
-            onSendMessage={handleSendMessage}
-            isLoading={askMutation.isPending}
-          />
+          <div className="min-w-0 overflow-hidden">
+            <ChatInterface
+              messages={messages}
+              onSendMessage={handleSendMessage}
+              isLoading={askMutation.isPending}
+            />
+          </div>
 
           {/* Sidebar */}
           <div className="space-y-4">

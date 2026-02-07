@@ -43,7 +43,7 @@ export function ChatInterface({
   };
 
   return (
-    <div className="flex h-[600px] flex-col rounded-lg border border-border/40 bg-card">
+    <div className="flex h-[600px] flex-col rounded-lg border border-border/40 bg-card overflow-hidden">
       {/* Messages Area */}
       <ScrollArea ref={scrollAreaRef} className="flex-1 p-4">
         {messages.length === 0 ? (
@@ -56,7 +56,7 @@ export function ChatInterface({
             </div>
           </div>
         ) : (
-          <div className="space-y-4">
+          <div className="space-y-4 overflow-hidden">
             {messages.map((message) => (
               <MessageBubble key={message.id} message={message} />
             ))}
