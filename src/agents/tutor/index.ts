@@ -315,7 +315,8 @@ Ask me anything about the codebase!
 
 export async function chat(
   repositoryName: string,
-  question: string
+  question: string,
+  accessToken?: string
 ): Promise<string> {
   console.log(`\n💬 Chat: "${question.substring(0, 50)}..."`);
 
@@ -330,9 +331,9 @@ export async function chat(
     session = activeSessions.get(repositoryName)!;
   }
 
-  // STEP 1: Retrieve relevant context (RAG)
+  // STEP 1: Retrieve relevant context (RAG) - pass user's token for private repos
   console.log("🔍 Retrieving relevant context...");
-  const context = await retrieveContextForQuestion(question, repositoryName);
+  const context = await retrieveContextForQuestion(question, repositoryName, accessToken);
 
   const hasFiles = context.files.length > 0;
   const hasConventions = context.conventions.length > 0;
@@ -342,7 +343,7 @@ export async function chat(
   if (!hasFiles && !hasConventions && !hasFileTree) {
     // For structure questions, try to get the overview
     if (context.questionType === "structure") {
-      const overview = await getRepositoryOverview(repositoryName);
+      const overview = await getRepositoryOverview(repositoryName, accessToken);
       if (overview.totalFiles > 0) {
         context.fileTree = overview.fileTree;
         context.files = overview.entryPoints;

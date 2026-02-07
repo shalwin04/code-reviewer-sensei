@@ -16,6 +16,11 @@ function getOctokit(): Octokit {
   return octokit;
 }
 
+// Create an Octokit instance with a specific token (for user-authenticated requests)
+function createOctokitWithToken(token: string): Octokit {
+  return new Octokit({ auth: token });
+}
+
 export async function fetchPRDiff(
   repoFullName: string,
   prNumber: number
@@ -175,6 +180,30 @@ export async function getRepoContents(
   throw new Error(`Could not get content for ${filePath}`);
 }
 
+// Version that accepts a user's access token for private repos
+export async function getRepoContentsWithToken(
+  repoFullName: string,
+  filePath: string,
+  ref?: string,
+  accessToken?: string
+): Promise<string> {
+  const [owner, repo] = repoFullName.split("/");
+  const client = accessToken ? createOctokitWithToken(accessToken) : getOctokit();
+
+  const { data } = await client.repos.getContent({
+    owner,
+    repo,
+    path: filePath,
+    ref,
+  });
+
+  if ("content" in data && data.content) {
+    return Buffer.from(data.content, "base64").toString("utf-8");
+  }
+
+  throw new Error(`Could not get content for ${filePath}`);
+}
+
 // ============================================
 // Repository Content Fetching (for Learning)
 // ============================================
@@ -190,10 +219,12 @@ export interface RepoFile {
 
 export async function fetchRepoCodeFiles(
   repoFullName: string,
-  branch?: string
+  branch?: string,
+  accessToken?: string
 ): Promise<RepoFile[]> {
   const [owner, repo] = repoFullName.split("/");
-  const client = getOctokit();
+  // Use user's token if provided, otherwise use server token
+  const client = accessToken ? createOctokitWithToken(accessToken) : getOctokit();
 
   console.log(`   Fetching repository tree from GitHub...`);
 
@@ -232,7 +263,7 @@ export async function fetchRepoCodeFiles(
 
   for (const file of filesToFetch) {
     try {
-      const content = await getRepoContents(repoFullName, file.path!, branch);
+      const content = await getRepoContentsWithToken(repoFullName, file.path!, branch, accessToken);
 
       // Skip files that are too large
       if (content.length > MAX_FILE_SIZE) {
@@ -255,10 +286,12 @@ export async function fetchRepoCodeFiles(
 
 export async function fetchRepoADRs(
   repoFullName: string,
-  branch?: string
+  branch?: string,
+  accessToken?: string
 ): Promise<RepoFile[]> {
   const [owner, repo] = repoFullName.split("/");
-  const client = getOctokit();
+  // Use user's token if provided, otherwise use server token
+  const client = accessToken ? createOctokitWithToken(accessToken) : getOctokit();
 
   // Get default branch if not specified
   if (!branch) {
@@ -300,7 +333,7 @@ export async function fetchRepoADRs(
   const files: RepoFile[] = [];
   for (const file of adrFiles.slice(0, 20)) {
     try {
-      const content = await getRepoContents(repoFullName, file.path!, branch);
+      const content = await getRepoContentsWithToken(repoFullName, file.path!, branch, accessToken);
       files.push({
         path: file.path!,
         content,

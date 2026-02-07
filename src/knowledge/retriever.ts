@@ -315,12 +315,13 @@ export async function retrieveConventionsForDiff(
 export async function retrieveFilesForQuestion(
   question: string,
   repo: string,
-  limit: number = 5
+  limit: number = 5,
+  accessToken?: string
 ): Promise<RetrievedFile[]> {
   console.log(`🔍 Retrieving files for question...`);
 
   try {
-    const files = await fetchRepoCodeFiles(repo);
+    const files = await fetchRepoCodeFiles(repo, undefined, accessToken);
 
     if (files.length === 0) {
       console.log("   No files fetched from repository");
@@ -420,7 +421,7 @@ export async function retrieveFilesForDiff(
 // Repository Overview (for structure questions)
 // ============================================================================
 
-export async function getRepositoryOverview(repo: string): Promise<{
+export async function getRepositoryOverview(repo: string, accessToken?: string): Promise<{
   fileTree: string;
   entryPoints: RetrievedFile[];
   totalFiles: number;
@@ -428,7 +429,7 @@ export async function getRepositoryOverview(repo: string): Promise<{
   console.log(`🔍 Building repository overview...`);
 
   try {
-    const files = await fetchRepoCodeFiles(repo);
+    const files = await fetchRepoCodeFiles(repo, undefined, accessToken);
 
     if (files.length === 0) {
       return { fileTree: "No files found", entryPoints: [], totalFiles: 0 };
@@ -466,7 +467,8 @@ export async function getRepositoryOverview(repo: string): Promise<{
 
 export async function retrieveContextForQuestion(
   question: string,
-  repo: string
+  repo: string,
+  accessToken?: string
 ): Promise<RetrievalResult> {
   const questionType = detectQuestionType(question);
   console.log(`   Question type: ${questionType}`);
@@ -474,7 +476,7 @@ export async function retrieveContextForQuestion(
   // For structure questions, include file tree
   if (questionType === "structure") {
     const [overview, conventionResults] = await Promise.all([
-      getRepositoryOverview(repo),
+      getRepositoryOverview(repo, accessToken),
       retrieveConventionsForQuestion(question, repo, 10),
     ]);
 
@@ -491,7 +493,7 @@ export async function retrieveContextForQuestion(
   // For convention questions, prioritize conventions
   if (questionType === "convention") {
     const [files, conventionResults] = await Promise.all([
-      retrieveFilesForQuestion(question, repo, 3),
+      retrieveFilesForQuestion(question, repo, 3, accessToken),
       retrieveConventionsForQuestion(question, repo, 12),
     ]);
 
@@ -507,7 +509,7 @@ export async function retrieveContextForQuestion(
   // For specific/howto questions, prioritize files
   if (questionType === "specific" || questionType === "howto") {
     const [files, conventionResults] = await Promise.all([
-      retrieveFilesForQuestion(question, repo, 8),
+      retrieveFilesForQuestion(question, repo, 8, accessToken),
       retrieveConventionsForQuestion(question, repo, 5),
     ]);
 
@@ -522,7 +524,7 @@ export async function retrieveContextForQuestion(
 
   // General questions - balanced retrieval
   const [files, conventionResults] = await Promise.all([
-    retrieveFilesForQuestion(question, repo, 5),
+    retrieveFilesForQuestion(question, repo, 5, accessToken),
     retrieveConventionsForQuestion(question, repo, 8),
   ]);
 

@@ -5,13 +5,16 @@ import session from "express-session";
 import { config } from "../config/index.js";
 import {
   orchestrateReview,
-  orchestrateQuestion,
+  orchestrateLearning,
   formatForGitHub,
 } from "../orchestrator/index.js";
+import { chat as tutorChat } from "../agents/tutor/index.js";
 import {
   fetchPRDiff,
   postPRReview,
   isPRWebhookPayload,
+  fetchRepoCodeFiles,
+  fetchRepoADRs,
 } from "../integrations/github.js";
 import { getSupabaseKnowledgeStore } from "../knowledge/supabase-store.js";
 import {
@@ -236,16 +239,81 @@ app.post("/api/ask", requireAuth, async (req: Request, res: Response) => {
       return;
     }
 
-    // Set repository context if provided
-    if (repo) {
-      config.repository.fullName = repo;
+    if (!repo) {
+      res.status(400).json({ error: "Repository is required" });
+      return;
     }
 
-    const result = await orchestrateQuestion(question);
-    res.json({ answer: result.finalOutput });
+    // Set repository context
+    config.repository.fullName = repo;
+
+    // Get user's access token for fetching private repos
+    const accessToken = req.user?.accessToken;
+
+    // Use tutor chat directly with the user's access token for private repo support
+    const answer = await tutorChat(repo, question, accessToken);
+    res.json({ answer });
   } catch (error) {
     console.error("Failed to answer question:", error);
     res.status(500).json({ error: "Failed to answer question" });
+  }
+});
+
+// Learn conventions from a repository (requires auth)
+app.post("/api/learn", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { repo } = req.body;
+
+    if (!repo) {
+      res.status(400).json({ error: "repo is required" });
+      return;
+    }
+
+    // Get user's access token for fetching private repos
+    const accessToken = req.user?.accessToken;
+
+    console.log(`\n📚 Learning conventions from: ${repo}`);
+
+    // Fetch code files using user's token (for private repos)
+    const codeFiles = await fetchRepoCodeFiles(repo, undefined, accessToken);
+    const codebase = codeFiles.map((f) => `// File: ${f.path}\n${f.content}`);
+    console.log(`   Fetched ${codebase.length} code files`);
+
+    // Fetch ADRs if present
+    const adrFiles = await fetchRepoADRs(repo, undefined, accessToken);
+    const adrs = adrFiles.map((f) => `# File: ${f.path}\n${f.content}`);
+    if (adrs.length > 0) {
+      console.log(`   Fetched ${adrs.length} ADR files`);
+    }
+
+    if (codebase.length === 0 && adrs.length === 0) {
+      res.status(400).json({
+        error: "No code files found in repository",
+        message: "The repository appears to be empty or doesn't contain any supported code files."
+      });
+      return;
+    }
+
+    // Set repository context
+    config.repository.fullName = repo;
+
+    // Run the learning orchestrator
+    const result = await orchestrateLearning(
+      { codebase, adrs, prReviews: [], incidents: [] },
+      repo
+    );
+
+    res.json({
+      success: result.status === "complete",
+      message: result.finalOutput,
+      stats: {
+        filesProcessed: codebase.length,
+        adrsProcessed: adrs.length,
+      }
+    });
+  } catch (error) {
+    console.error("Failed to learn conventions:", error);
+    res.status(500).json({ error: "Failed to learn conventions" });
   }
 });
 
@@ -1115,6 +1183,7 @@ export function startServer() {
     console.log(`  GET  /api/stats?repo=owner/repo     - Knowledge store stats`);
     console.log(`  GET  /api/conventions?repo=...      - List all conventions`);
     console.log(`  POST /api/ask                       - Ask a question (auth required)`);
+    console.log(`  POST /api/learn                     - Learn conventions from repo (auth required)`);
     console.log(`  POST /api/review                    - Trigger manual review (auth required)`);
     console.log(`  GET  /api/reviews?repo=...          - Get review history`);
     console.log(`  GET  /api/github-app/info           - Get GitHub App install URL`);
