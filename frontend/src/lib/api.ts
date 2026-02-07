@@ -396,6 +396,17 @@ class ApiClient {
     });
   }
 
+  async learn(repo: string): Promise<{
+    success: boolean;
+    message: string;
+    stats: { filesProcessed: number; adrsProcessed: number };
+  }> {
+    return this.request('/learn', {
+      method: 'POST',
+      body: JSON.stringify({ repo }),
+    });
+  }
+
   // ============================================
   // Review History Endpoints
   // ============================================
