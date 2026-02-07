@@ -34,7 +34,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       </Avatar>
       <div
         className={cn(
-          "max-w-[80%] rounded-lg px-4 py-2 overflow-hidden",
+          "max-w-[80%] rounded-lg px-4 py-2 min-w-0",
           isUser
             ? "bg-primary text-primary-foreground"
             : "bg-muted text-foreground"
@@ -42,16 +42,16 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       >
         {message.isTyping ? (
           <TypingAnimation
-            className="text-sm leading-normal break-words"
+            className="text-sm leading-normal [overflow-wrap:anywhere]"
             duration={20}
             showCursor={false}
           >
             {message.content}
           </TypingAnimation>
         ) : isUser ? (
-          <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
+          <p className="text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">{message.content}</p>
         ) : (
-          <div className="text-sm overflow-hidden">
+          <div className="text-sm min-w-0">
             <Markdown>{message.content}</Markdown>
           </div>
         )}

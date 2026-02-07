@@ -110,7 +110,7 @@ export default function AskPage() {
       ) : (
         <div className="grid gap-6 lg:grid-cols-[1fr_300px] min-w-0">
           {/* Chat Interface */}
-          <div className="min-w-0 overflow-hidden">
+          <div className="min-w-0">
             <ChatInterface
               messages={messages}
               onSendMessage={handleSendMessage}
