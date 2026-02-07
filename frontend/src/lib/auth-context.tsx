@@ -47,6 +47,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshUser = useCallback(async () => {
+    // First check localStorage (for cross-domain auth workaround)
+    const storedUser = localStorage.getItem("auth_user");
+    if (storedUser) {
+      try {
+        const userData = JSON.parse(storedUser);
+        setUser({
+          ...userData,
+          isAuthenticated: true,
+        });
+        return { ...userData, isAuthenticated: true };
+      } catch (e) {
+        console.error("Failed to parse stored user:", e);
+        localStorage.removeItem("auth_user");
+      }
+    }
+
+    // Then try the API (for same-domain or cookie-based auth)
     try {
       const userData = await apiClient.getCurrentUser();
       if (userData.isAuthenticated) {
@@ -116,6 +133,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     initAuth();
   }, [refreshUser, refreshRepositories]);
 
+  // Listen for storage events (cross-tab auth sync and callback page)
+  useEffect(() => {
+    const handleStorageChange = async () => {
+      const storedUser = localStorage.getItem("auth_user");
+      if (storedUser && !user) {
+        try {
+          const userData = JSON.parse(storedUser);
+          setUser({
+            ...userData,
+            isAuthenticated: true,
+          });
+          await refreshRepositories();
+        } catch (e) {
+          console.error("Failed to parse stored user:", e);
+        }
+      } else if (!storedUser && user) {
+        setUser(null);
+        setRepositories([]);
+      }
+    };
+
+    window.addEventListener("storage", handleStorageChange);
+    return () => window.removeEventListener("storage", handleStorageChange);
+  }, [user, refreshRepositories]);
+
   const login = useCallback(() => {
     // Redirect to backend OAuth endpoint
     window.location.href = apiClient.getLoginUrl();
@@ -132,6 +174,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setRepositories([]);
     setSelectedRepoState(null);
     localStorage.removeItem("selectedRepo");
+    localStorage.removeItem("auth_user");
     router.push("/");
   }, [router]);
 

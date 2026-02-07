@@ -285,11 +285,26 @@ class ApiClient {
       ? `${this.baseUrl}${endpoint}`
       : `${this.baseUrl}/api${endpoint}`;
 
+    // Get access token from localStorage (for cross-domain auth)
+    let accessToken: string | null = null;
+    if (typeof window !== 'undefined') {
+      try {
+        const storedUser = localStorage.getItem('auth_user');
+        if (storedUser) {
+          const userData = JSON.parse(storedUser);
+          accessToken = userData.accessToken;
+        }
+      } catch (e) {
+        // Ignore parse errors
+      }
+    }
+
     const response = await fetch(url, {
       ...options,
       credentials: 'include', // Important for cookies/sessions
       headers: {
         'Content-Type': 'application/json',
+        ...(accessToken ? { 'Authorization': `Bearer ${accessToken}` } : {}),
         ...options?.headers,
       },
     });
