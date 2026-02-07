@@ -271,10 +271,7 @@ export type RawViolation = {
 export type PRDiffInput = {
   prNumber: number;
   title: string;
-  files: Array<{
-    path: string;
-    diff: string;
-  }>;
+  files: PRFileDiff[];
   baseBranch: string;
   headBranch: string;
 };

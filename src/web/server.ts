@@ -21,6 +21,9 @@ import {
   getReviewById,
   getOrCreateWebhookRegistration,
   recordWebhookReceived,
+  getLeaderboard,
+  getBadgeInfo,
+  getAllBadges,
 } from "../integrations/supabase.js";
 import {
   isGitHubAppConfigured,
@@ -344,6 +347,380 @@ app.get("/api/reviews/:id", optionalAuth, async (req: Request, res: Response) =>
     console.error("Failed to get review:", error);
     res.status(500).json({ error: "Failed to get review" });
   }
+});
+
+// Generate AI fix for a violation
+app.post("/api/fix", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { repo, file, line, originalCode, violation, suggestion } = req.body;
+
+    if (!file || !violation) {
+      res.status(400).json({ error: "file and violation are required" });
+      return;
+    }
+
+    // Use the LLM to generate a fix
+    const { getModelForTask } = await import("../utils/llm.js");
+    const llm = getModelForTask("tutor");
+
+    const prompt = `You are an expert code reviewer helping fix a code violation.
+
+**Repository:** ${repo || "unknown"}
+**File:** ${file}
+**Line:** ${line || "unknown"}
+**Violation:** ${violation}
+${suggestion ? `**Suggested Approach:** ${suggestion}` : ""}
+
+**Original Code:**
+\`\`\`
+${originalCode || "// Code not provided"}
+\`\`\`
+
+Please provide the fixed code. Only output the corrected code without any explanation.
+If the original code is not provided, generate a reasonable fix based on the violation description.
+
+**Fixed Code:**`;
+
+    const response = await llm.invoke(prompt);
+    const fixedCode = typeof response.content === "string"
+      ? response.content.trim()
+      : response.content.toString().trim();
+
+    // Clean up the response (remove markdown code blocks if present)
+    let cleanedCode = fixedCode;
+    const codeBlockMatch = fixedCode.match(/```(?:\w+)?\n?([\s\S]*?)```/);
+    if (codeBlockMatch) {
+      cleanedCode = codeBlockMatch[1].trim();
+    }
+
+    res.json({
+      success: true,
+      originalCode: originalCode || "",
+      fixedCode: cleanedCode,
+      file,
+      line,
+      violation,
+    });
+  } catch (error) {
+    console.error("Failed to generate fix:", error);
+    res.status(500).json({ error: "Failed to generate fix" });
+  }
+});
+
+// Get PR diff for viewing
+app.get("/api/pr/:owner/:repo/:prNumber/diff", optionalAuth, async (req: Request, res: Response) => {
+  try {
+    const owner = req.params.owner as string;
+    const repo = req.params.repo as string;
+    const prNumber = req.params.prNumber as string;
+    const repoFullName = `${owner}/${repo}`;
+    const prNum = parseInt(prNumber, 10);
+
+    if (isNaN(prNum)) {
+      res.status(400).json({ error: "Invalid PR number" });
+      return;
+    }
+
+    const prDiff = await fetchPRDiff(repoFullName, prNum);
+
+    res.json({
+      prNumber: prDiff.prNumber,
+      title: prDiff.title,
+      baseBranch: prDiff.baseBranch,
+      headBranch: prDiff.headBranch,
+      files: prDiff.files.map((f) => ({
+        path: f.path,
+        diff: f.diff,
+        status: f.status,
+        additions: f.additions,
+        deletions: f.deletions,
+      })),
+    });
+  } catch (error) {
+    console.error("Failed to fetch PR diff:", error);
+    res.status(500).json({ error: "Failed to fetch PR diff" });
+  }
+});
+
+// ============================================
+// Security Scanner Endpoints
+// ============================================
+
+// Security patterns to check for
+const SECURITY_PATTERNS = [
+  {
+    id: "hardcoded-secret",
+    name: "Hardcoded Secret",
+    severity: "critical",
+    category: "secrets",
+    pattern: /(api[_-]?key|password|secret|token|auth|credential)\s*[:=]\s*["'][^"']{8,}["']/gi,
+    description: "Potential hardcoded secret or API key detected",
+  },
+  {
+    id: "sql-injection",
+    name: "SQL Injection",
+    severity: "critical",
+    category: "injection",
+    pattern: /(\$\{.*\}|' \+ |" \+ |\+ ['"]|query\s*\(.*\+)/gi,
+    description: "Potential SQL injection vulnerability - use parameterized queries",
+  },
+  {
+    id: "xss-vulnerability",
+    name: "XSS Vulnerability",
+    severity: "high",
+    category: "xss",
+    pattern: /(innerHTML\s*=|dangerouslySetInnerHTML|document\.write\(|\.html\()/gi,
+    description: "Potential XSS vulnerability - sanitize user input before rendering",
+  },
+  {
+    id: "eval-usage",
+    name: "Eval Usage",
+    severity: "high",
+    category: "injection",
+    pattern: /\beval\s*\(|\bnew Function\s*\(/gi,
+    description: "Use of eval() or Function() constructor can lead to code injection",
+  },
+  {
+    id: "insecure-random",
+    name: "Insecure Random",
+    severity: "medium",
+    category: "crypto",
+    pattern: /Math\.random\s*\(/gi,
+    description: "Math.random() is not cryptographically secure - use crypto.randomBytes() for security-sensitive operations",
+  },
+  {
+    id: "http-url",
+    name: "Insecure HTTP",
+    severity: "medium",
+    category: "transport",
+    pattern: /["']http:\/\/(?!localhost|127\.0\.0\.1)/gi,
+    description: "Use HTTPS instead of HTTP for external URLs",
+  },
+  {
+    id: "cors-wildcard",
+    name: "CORS Wildcard",
+    severity: "medium",
+    category: "access-control",
+    pattern: /Access-Control-Allow-Origin['":\s]+\*/gi,
+    description: "CORS wildcard (*) allows any origin - restrict to specific domains",
+  },
+  {
+    id: "command-injection",
+    name: "Command Injection",
+    severity: "critical",
+    category: "injection",
+    pattern: /(exec|spawn|execSync|spawnSync)\s*\([^)]*\$\{|child_process/gi,
+    description: "Potential command injection - sanitize input before shell execution",
+  },
+  {
+    id: "path-traversal",
+    name: "Path Traversal",
+    severity: "high",
+    category: "injection",
+    pattern: /\.\.\//g,
+    description: "Potential path traversal vulnerability - validate file paths",
+  },
+  {
+    id: "weak-crypto",
+    name: "Weak Cryptography",
+    severity: "medium",
+    category: "crypto",
+    pattern: /(md5|sha1)[\s('"]/gi,
+    description: "MD5 and SHA1 are considered weak - use SHA256 or stronger",
+  },
+];
+
+interface SecurityFinding {
+  id: string;
+  name: string;
+  severity: "critical" | "high" | "medium" | "low" | "info";
+  category: string;
+  description: string;
+  file: string;
+  line: number;
+  code: string;
+}
+
+// Scan code for security issues
+app.post("/api/security/scan", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { repo, prNumber, files } = req.body;
+
+    if (!repo) {
+      res.status(400).json({ error: "repo is required" });
+      return;
+    }
+
+    let filesToScan = files;
+
+    // If prNumber provided, fetch files from PR
+    if (prNumber && !files) {
+      const prDiff = await fetchPRDiff(repo, prNumber);
+      filesToScan = prDiff.files.map((f) => ({
+        path: f.path,
+        content: f.diff,
+      }));
+    }
+
+    if (!filesToScan || !Array.isArray(filesToScan)) {
+      res.status(400).json({ error: "files array or prNumber is required" });
+      return;
+    }
+
+    const findings: SecurityFinding[] = [];
+
+    for (const file of filesToScan) {
+      const content = file.content || "";
+      const lines = content.split("\n");
+
+      for (const pattern of SECURITY_PATTERNS) {
+        // Reset regex state
+        pattern.pattern.lastIndex = 0;
+
+        for (let lineNum = 0; lineNum < lines.length; lineNum++) {
+          const line = lines[lineNum];
+          pattern.pattern.lastIndex = 0;
+
+          if (pattern.pattern.test(line)) {
+            findings.push({
+              id: `${pattern.id}-${file.path}-${lineNum}`,
+              name: pattern.name,
+              severity: pattern.severity as SecurityFinding["severity"],
+              category: pattern.category,
+              description: pattern.description,
+              file: file.path,
+              line: lineNum + 1,
+              code: line.trim().slice(0, 100),
+            });
+          }
+        }
+      }
+    }
+
+    // Also use AI to analyze for more complex security issues
+    if (findings.length === 0 && filesToScan.length > 0) {
+      try {
+        const { getModelForTask } = await import("../utils/llm.js");
+        const llm = getModelForTask("reviewer");
+
+        const codeContext = filesToScan
+          .slice(0, 3) // Limit to first 3 files
+          .map((f: { path: string; content: string }) => `File: ${f.path}\n${f.content.slice(0, 2000)}`)
+          .join("\n\n---\n\n");
+
+        const prompt = `Analyze the following code for security vulnerabilities. Look for:
+- Hardcoded secrets, API keys, passwords
+- SQL injection vulnerabilities
+- XSS vulnerabilities
+- Authentication/authorization issues
+- Insecure data handling
+- OWASP Top 10 issues
+
+Only report actual security issues, not style or best practice suggestions.
+
+Code:
+${codeContext}
+
+Respond in JSON format with an array of findings:
+[{"name": "Issue Name", "severity": "critical|high|medium|low", "category": "category", "description": "description", "file": "filename", "line": 0, "code": "relevant code"}]
+
+If no security issues found, return an empty array: []`;
+
+        const response = await llm.invoke(prompt);
+        const responseText = typeof response.content === "string"
+          ? response.content
+          : response.content.toString();
+
+        // Try to parse JSON from response
+        const jsonMatch = responseText.match(/\[[\s\S]*\]/);
+        if (jsonMatch) {
+          const aiFindings = JSON.parse(jsonMatch[0]);
+          for (const f of aiFindings) {
+            findings.push({
+              id: `ai-${f.category || "security"}-${findings.length}`,
+              name: f.name || "Security Issue",
+              severity: f.severity || "medium",
+              category: f.category || "security",
+              description: f.description || "",
+              file: f.file || "unknown",
+              line: f.line || 0,
+              code: f.code || "",
+            });
+          }
+        }
+      } catch (aiError) {
+        console.error("AI security analysis failed:", aiError);
+        // Continue with pattern-based findings only
+      }
+    }
+
+    // Sort by severity
+    const severityOrder = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+    findings.sort((a, b) => severityOrder[a.severity] - severityOrder[b.severity]);
+
+    // Calculate summary
+    const summary = {
+      total: findings.length,
+      critical: findings.filter((f) => f.severity === "critical").length,
+      high: findings.filter((f) => f.severity === "high").length,
+      medium: findings.filter((f) => f.severity === "medium").length,
+      low: findings.filter((f) => f.severity === "low").length,
+      categories: [...new Set(findings.map((f) => f.category))],
+    };
+
+    res.json({
+      repo,
+      prNumber: prNumber || null,
+      scannedAt: new Date().toISOString(),
+      summary,
+      findings,
+    });
+  } catch (error) {
+    console.error("Security scan failed:", error);
+    res.status(500).json({ error: "Security scan failed" });
+  }
+});
+
+// ============================================
+// Leaderboard & Gamification Endpoints
+// ============================================
+
+// Get leaderboard for a repo
+app.get("/api/leaderboard", optionalAuth, async (req: Request, res: Response) => {
+  try {
+    const repo = req.query.repo as string;
+    const timeframe = (req.query.timeframe as "all" | "week" | "month") || "all";
+
+    if (!repo) {
+      res.status(400).json({ error: "repo query parameter is required" });
+      return;
+    }
+
+    const leaderboard = await getLeaderboard(repo, timeframe);
+    res.json(leaderboard);
+  } catch (error) {
+    console.error("Failed to get leaderboard:", error);
+    res.status(500).json({ error: "Failed to get leaderboard" });
+  }
+});
+
+// Get all available badges
+app.get("/api/badges", (_req: Request, res: Response) => {
+  const badges = getAllBadges();
+  res.json(badges);
+});
+
+// Get badge info
+app.get("/api/badges/:badgeId", (req: Request, res: Response) => {
+  const badgeId = req.params.badgeId as string;
+  const badge = getBadgeInfo(badgeId);
+
+  if (!badge) {
+    res.status(404).json({ error: "Badge not found" });
+    return;
+  }
+
+  res.json(badge);
 });
 
 // Get webhook setup info for a repo
