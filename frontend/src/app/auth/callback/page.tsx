@@ -1,11 +1,10 @@
 "use client";
 
 import { Suspense, useEffect } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 
 function AuthCallbackContent() {
-  const router = useRouter();
   const searchParams = useSearchParams();
 
   useEffect(() => {
@@ -20,19 +19,16 @@ function AuthCallbackContent() {
         // Store in localStorage for persistence
         localStorage.setItem("auth_user", JSON.stringify(userData));
 
-        // Trigger a storage event for other tabs
-        window.dispatchEvent(new Event("storage"));
-
-        // Redirect to dashboard
-        router.replace("/dashboard");
+        // Full page reload to reinitialize auth context
+        window.location.href = "/dashboard";
       } catch (error) {
         console.error("Failed to parse auth data:", error);
-        router.replace("/?auth=error");
+        window.location.href = "/?auth=error";
       }
     } else {
-      router.replace("/?auth=error");
+      window.location.href = "/?auth=error";
     }
-  }, [searchParams, router]);
+  }, [searchParams]);
 
   return (
     <div className="flex min-h-screen items-center justify-center">
