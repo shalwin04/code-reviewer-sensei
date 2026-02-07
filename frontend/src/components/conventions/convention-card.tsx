@@ -12,19 +12,31 @@ import {
   Wrench,
   Clock,
   ExternalLink,
+  EyeOff,
+  Eye,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Accordion,
   AccordionContent,
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import type { Convention } from "@/lib/api";
 
 interface ConventionCardProps {
   convention: Convention;
+  isIgnored?: boolean;
+  onToggleIgnore?: (id: string) => void;
 }
 
 const severityConfig: Record<string, {
@@ -165,7 +177,7 @@ function formatTimestamp(timestamp: string): string {
   }
 }
 
-export function ConventionCard({ convention }: ConventionCardProps) {
+export function ConventionCard({ convention, isIgnored, onToggleIgnore }: ConventionCardProps) {
   const severityKey = convention.severity?.toLowerCase() || "suggestion";
   const config = severityConfig[severityKey] || defaultConfig;
   const Icon = config.icon;
@@ -174,6 +186,7 @@ export function ConventionCard({ convention }: ConventionCardProps) {
   const description = convention.description || "No description provided";
   const category = convention.category || "general";
   const confidence = typeof convention.confidence === "number" ? convention.confidence : 0.5;
+  const conventionId = convention.id || `${category}-${title}`.slice(0, 50);
 
   // Parse source info
   const sourceInfo = parseSource(convention.source);
@@ -185,19 +198,55 @@ export function ConventionCard({ convention }: ConventionCardProps) {
   const singleExample = convention.example || examples[0]?.good;
 
   return (
-    <Card className="transition-all hover:border-primary/50 hover:shadow-md">
+    <Card className={cn(
+      "transition-all hover:border-primary/50 hover:shadow-md",
+      isIgnored && "opacity-50 border-dashed"
+    )}>
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-start gap-3">
             <Icon className={`mt-0.5 h-5 w-5 flex-shrink-0 ${config.color}`} />
             <div className="min-w-0">
-              <CardTitle className="text-base line-clamp-2">{title}</CardTitle>
+              <CardTitle className="text-base line-clamp-2">
+                {title}
+                {isIgnored && (
+                  <Badge variant="outline" className="ml-2 text-xs">Ignored</Badge>
+                )}
+              </CardTitle>
               <CardDescription className="mt-1 line-clamp-3">
                 {description}
               </CardDescription>
             </div>
           </div>
-          <Badge variant={config.badgeVariant} className="flex-shrink-0">{config.label}</Badge>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <Badge variant={config.badgeVariant}>{config.label}</Badge>
+            {onToggleIgnore && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleIgnore(conventionId);
+                      }}
+                    >
+                      {isIgnored ? (
+                        <Eye className="h-4 w-4" />
+                      ) : (
+                        <EyeOff className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {isIgnored ? "Enable this rule" : "Ignore this rule"}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">

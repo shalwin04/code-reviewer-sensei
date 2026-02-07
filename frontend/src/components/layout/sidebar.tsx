@@ -9,6 +9,8 @@ import {
   GitPullRequest,
   History,
   Webhook,
+  Trophy,
+  Shield,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -18,6 +20,8 @@ const sidebarItems = [
   { href: "/conventions", label: "Conventions", icon: BookOpen },
   { href: "/review", label: "Review PR", icon: GitPullRequest },
   { href: "/reviews", label: "Review History", icon: History },
+  { href: "/security", label: "Security Scanner", icon: Shield },
+  { href: "/leaderboard", label: "Leaderboard", icon: Trophy },
   { href: "/webhooks", label: "Auto Reviews", icon: Webhook },
 ];
 

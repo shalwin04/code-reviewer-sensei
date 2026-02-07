@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
@@ -18,13 +19,18 @@ import {
   Loader2,
   FileCode,
   Wand2,
+  Code,
+  List,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Markdown } from "@/components/ui/markdown";
+import { DiffViewer } from "@/components/review/diff-viewer";
+import { FixPreviewModal } from "@/components/review/fix-preview-modal";
 import apiClient, { type ReviewHistoryItem } from "@/lib/api";
 
 // Normalized violation type
@@ -38,31 +44,44 @@ interface NormalizedViolation {
   suggestion?: string;
   codeSnippet?: string;
   category?: string;
+  reasoning?: string;
+  impact?: string;
+  teamExpectation?: string;
+}
+
+// Raw violation from backend (RawViolation or ExplainedFeedback)
+interface RawViolationData {
+  id?: string;
+  file?: string;
+  path?: string;
+  line?: number;
+  lineNumber?: number;
+  type?: string;  // Category type from RawViolation
+  issue?: string; // Main message from RawViolation
+  rule?: string;
+  conventionId?: string;
+  category?: string;
+  message?: string;
+  body?: string;
+  explanation?: string;
+  description?: string;
+  severity?: string;
+  suggestion?: string;
+  fix?: string;
+  recommendation?: string;
+  codeSnippet?: string;
+  code?: string;
+  snippet?: string;
+  reasoning?: string;
+  impact?: string;
+  teamExpectation?: string;
+  // ExplainedFeedback wraps RawViolation
+  violation?: RawViolationData;
 }
 
 // Raw data from backend
 interface ReviewData {
-  violations?: Array<{
-    id?: string;
-    file?: string;
-    path?: string;
-    line?: number;
-    lineNumber?: number;
-    rule?: string;
-    conventionId?: string;
-    category?: string;
-    message?: string;
-    body?: string;
-    explanation?: string;
-    description?: string;
-    severity?: string;
-    suggestion?: string;
-    fix?: string;
-    recommendation?: string;
-    codeSnippet?: string;
-    code?: string;
-    snippet?: string;
-  }>;
+  violations?: RawViolationData[];
   comments?: Array<{
     path: string;
     line: number;
@@ -121,7 +140,7 @@ function normalizeReviewData(reviewData: ReviewData | null): NormalizedViolation
 
         // RawViolation uses 'type' for category, 'issue' for message
         // ExplainedFeedback wraps RawViolation in 'violation' field
-        const rawViolation = (v as any).violation || v;
+        const rawViolation = v.violation || v;
 
         violations.push({
           id: v.id || rawViolation.id || `violation-${index}`,
@@ -138,9 +157,9 @@ function normalizeReviewData(reviewData: ReviewData | null): NormalizedViolation
           codeSnippet: rawViolation.code || v.code || v.codeSnippet || v.snippet,
           category: rawViolation.type || v.type || v.category || rawViolation.category,
           // Additional context from ExplainedFeedback
-          reasoning: rawViolation.reasoning || (v as any).reasoning,
-          impact: rawViolation.impact || (v as any).impact,
-          teamExpectation: (v as any).teamExpectation,
+          reasoning: rawViolation.reasoning || v.reasoning,
+          impact: rawViolation.impact || v.impact,
+          teamExpectation: v.teamExpectation,
         });
       }
     });
@@ -168,37 +187,52 @@ function normalizeReviewData(reviewData: ReviewData | null): NormalizedViolation
   return violations;
 }
 
-function ViolationCard({ violation }: { violation: NormalizedViolation }) {
+function ViolationCard({ violation, repo }: { violation: NormalizedViolation; repo: string | null }) {
+  const [showFixModal, setShowFixModal] = useState(false);
   const severity = severityConfig[violation.severity as keyof typeof severityConfig] || severityConfig.suggestion;
   const SeverityIcon = severity.icon;
 
   return (
-    <Card className={`border-l-4 ${severity.borderLeft}`}>
-      <CardHeader className="pb-3">
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex items-start gap-3">
-            <div className={`mt-0.5 rounded-full p-1.5 ${severity.bg}`}>
-              <SeverityIcon className={`h-4 w-4 ${severity.color}`} />
-            </div>
-            <div className="min-w-0 flex-1">
-              <CardTitle className="text-base">{violation.rule}</CardTitle>
-              <div className="flex items-center gap-2 mt-1 text-sm text-muted-foreground">
-                <FileCode className="h-3.5 w-3.5" />
-                <code className="text-xs bg-muted px-1.5 py-0.5 rounded">
-                  {violation.file}
-                  {violation.line > 0 && <span className="text-primary">:{violation.line}</span>}
-                </code>
+    <>
+      <Card className={`border-l-4 ${severity.borderLeft}`}>
+        <CardHeader className="pb-3">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <div className={`mt-0.5 rounded-full p-1.5 ${severity.bg}`}>
+                <SeverityIcon className={`h-4 w-4 ${severity.color}`} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <CardTitle className="text-base">{violation.rule}</CardTitle>
+                <div className="flex items-center gap-2 mt-1 text-sm text-muted-foreground">
+                  <FileCode className="h-3.5 w-3.5" />
+                  <code className="text-xs bg-muted px-1.5 py-0.5 rounded">
+                    {violation.file}
+                    {violation.line > 0 && <span className="text-primary">:{violation.line}</span>}
+                  </code>
+                </div>
               </div>
             </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              {repo && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowFixModal(true)}
+                  className="text-purple-600 hover:text-purple-700 hover:bg-purple-50 dark:text-purple-400 dark:hover:bg-purple-950/50"
+                >
+                  <Wand2 className="h-3.5 w-3.5 mr-1.5" />
+                  Fix
+                </Button>
+              )}
+              <Badge
+                variant={violation.severity === "error" ? "destructive" : violation.severity === "warning" ? "default" : "secondary"}
+                className="capitalize"
+              >
+                {violation.severity}
+              </Badge>
+            </div>
           </div>
-          <Badge
-            variant={violation.severity === "error" ? "destructive" : violation.severity === "warning" ? "default" : "secondary"}
-            className="flex-shrink-0 capitalize"
-          >
-            {violation.severity}
-          </Badge>
-        </div>
-      </CardHeader>
+        </CardHeader>
       <CardContent className="space-y-3 pt-0">
         {/* Message with Markdown */}
         <div className="text-sm">
@@ -219,6 +253,32 @@ function ViolationCard({ violation }: { violation: NormalizedViolation }) {
           </div>
         )}
 
+        {/* Reasoning / Why it matters */}
+        {(violation.reasoning || violation.impact) && (
+          <div className="rounded-md border border-purple-500/30 bg-purple-500/5 p-3 space-y-2">
+            {violation.reasoning && (
+              <div>
+                <span className="text-xs font-medium text-purple-600 dark:text-purple-400">Why this matters:</span>
+                <p className="text-sm mt-1">{violation.reasoning}</p>
+              </div>
+            )}
+            {violation.impact && (
+              <div>
+                <span className="text-xs font-medium text-purple-600 dark:text-purple-400">Impact:</span>
+                <p className="text-sm mt-1">{violation.impact}</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Team Expectation */}
+        {violation.teamExpectation && (
+          <div className="rounded-md border border-blue-500/30 bg-blue-500/5 p-3">
+            <span className="text-xs font-medium text-blue-600 dark:text-blue-400">Team Expectation:</span>
+            <p className="text-sm mt-1">{violation.teamExpectation}</p>
+          </div>
+        )}
+
         {/* Suggestion */}
         {violation.suggestion && (
           <div className="rounded-md border border-green-500/30 bg-green-500/10 p-3">
@@ -235,11 +295,28 @@ function ViolationCard({ violation }: { violation: NormalizedViolation }) {
         {/* Category */}
         {violation.category && (
           <Badge variant="outline" className="text-xs capitalize">
-            {violation.category}
+            {violation.category.replace(/[-_]/g, " ")}
           </Badge>
         )}
       </CardContent>
     </Card>
+
+      {/* Fix Preview Modal */}
+      {repo && (
+        <FixPreviewModal
+          isOpen={showFixModal}
+          onClose={() => setShowFixModal(false)}
+          violation={{
+            file: violation.file,
+            line: violation.line,
+            message: violation.message,
+            suggestion: violation.suggestion,
+            codeSnippet: violation.codeSnippet,
+          }}
+          repo={repo}
+        />
+      )}
+    </>
   );
 }
 
@@ -272,11 +349,34 @@ export default function ReviewDetailsPage() {
   const params = useParams();
   const router = useRouter();
   const reviewId = params.id as string;
+  const [activeTab, setActiveTab] = useState("issues");
 
   const { data: review, isLoading, error } = useQuery({
     queryKey: ["review", reviewId],
     queryFn: () => apiClient.getReviewById(reviewId),
     enabled: !!reviewId,
+    // Poll every 3 seconds if review is pending or in progress
+    refetchInterval: (query) => {
+      const data = query.state.data;
+      if (data?.status === "pending" || data?.status === "in_progress") {
+        return 3000;
+      }
+      return false;
+    },
+  });
+
+  // Extract repo info from pr_url for fetching diff
+  const getRepoFromUrl = (url: string): string | null => {
+    const match = url.match(/github\.com\/([^/]+\/[^/]+)\/pull/);
+    return match ? match[1] : null;
+  };
+
+  const repoFullName = review?.pr_url ? getRepoFromUrl(review.pr_url) : null;
+
+  const { data: prDiff, isLoading: diffLoading } = useQuery({
+    queryKey: ["pr-diff", repoFullName, review?.pr_number],
+    queryFn: () => apiClient.getPRDiff(repoFullName!, review!.pr_number),
+    enabled: !!repoFullName && !!review?.pr_number && activeTab === "diff",
   });
 
   const getScoreColor = (score: number) => {
@@ -382,6 +482,31 @@ export default function ReviewDetailsPage() {
         </div>
       </div>
 
+      {/* In Progress Indicator */}
+      {(review.status === "pending" || review.status === "in_progress") && (
+        <Card className="border-blue-500/30 bg-blue-500/5">
+          <CardContent className="flex items-center gap-4 py-6">
+            <div className="relative">
+              <Loader2 className="h-8 w-8 text-blue-500 animate-spin" />
+              <div className="absolute inset-0 h-8 w-8 rounded-full border-2 border-blue-500/20" />
+            </div>
+            <div>
+              <h3 className="font-medium text-blue-600 dark:text-blue-400">
+                {review.status === "pending" ? "Review Queued" : "Review in Progress"}
+              </h3>
+              <p className="text-sm text-muted-foreground">
+                {review.status === "pending"
+                  ? "Your review is queued and will start shortly..."
+                  : "Analyzing code against your conventions..."}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                This page will update automatically when complete.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Stats */}
       {review.status === "completed" && (
         <div className="grid gap-4 md:grid-cols-5">
@@ -441,34 +566,53 @@ export default function ReviewDetailsPage() {
         </Card>
       )}
 
-      {/* Violations */}
-      {violations.length > 0 && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-xl font-semibold">Issues Found</h2>
-            <span className="text-sm text-muted-foreground">
-              {violations.length} issue{violations.length !== 1 ? "s" : ""}
-            </span>
-          </div>
-          <div className="space-y-4">
-            {violations.map((violation) => (
-              <ViolationCard key={violation.id} violation={violation} />
-            ))}
-          </div>
-        </div>
-      )}
+      {/* Tabs for Issues and Diff */}
+      {review.status === "completed" && (
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+          <TabsList className="grid w-full grid-cols-2 max-w-md">
+            <TabsTrigger value="issues" className="flex items-center gap-2">
+              <List className="h-4 w-4" />
+              Issues ({violations.length})
+            </TabsTrigger>
+            <TabsTrigger value="diff" className="flex items-center gap-2">
+              <Code className="h-4 w-4" />
+              Diff
+            </TabsTrigger>
+          </TabsList>
 
-      {/* No Issues */}
-      {review.status === "completed" && violations.length === 0 && (
-        <Card>
-          <CardContent className="flex flex-col items-center justify-center py-12">
-            <CheckCircle className="h-12 w-12 text-green-500" />
-            <h3 className="mt-4 text-lg font-medium">No issues found</h3>
-            <p className="text-sm text-muted-foreground">
-              This PR passed all convention checks.
-            </p>
-          </CardContent>
-        </Card>
+          <TabsContent value="issues" className="mt-6">
+            {violations.length > 0 ? (
+              <div className="space-y-4">
+                {violations.map((violation) => (
+                  <ViolationCard key={violation.id} violation={violation} repo={repoFullName} />
+                ))}
+              </div>
+            ) : (
+              <Card>
+                <CardContent className="flex flex-col items-center justify-center py-12">
+                  <CheckCircle className="h-12 w-12 text-green-500" />
+                  <h3 className="mt-4 text-lg font-medium">No issues found</h3>
+                  <p className="text-sm text-muted-foreground">
+                    This PR passed all convention checks.
+                  </p>
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+
+          <TabsContent value="diff" className="mt-6">
+            <DiffViewer
+              files={prDiff?.files || []}
+              violations={violations.map((v) => ({
+                file: v.file,
+                line: v.line,
+                message: v.message,
+                severity: v.severity,
+              }))}
+              isLoading={diffLoading}
+            />
+          </TabsContent>
+        </Tabs>
       )}
 
       {/* Timestamps */}

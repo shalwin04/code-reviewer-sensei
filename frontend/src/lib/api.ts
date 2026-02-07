@@ -172,6 +172,93 @@ export interface RepoInstallStatus {
   installationId: number | null;
 }
 
+export interface PRDiffFile {
+  path: string;
+  diff: string;
+  status: "added" | "removed" | "modified" | "renamed";
+  additions: number;
+  deletions: number;
+}
+
+export interface PRDiffResponse {
+  prNumber: number;
+  title: string;
+  baseBranch: string;
+  headBranch: string;
+  files: PRDiffFile[];
+}
+
+export interface FixRequest {
+  repo: string;
+  file: string;
+  line?: number;
+  originalCode?: string;
+  violation: string;
+  suggestion?: string;
+}
+
+export interface FixResponse {
+  success: boolean;
+  originalCode: string;
+  fixedCode: string;
+  file: string;
+  line?: number;
+  violation: string;
+}
+
+export interface LeaderboardEntry {
+  rank: number;
+  author: string;
+  totalReviews: number;
+  avgScore: number;
+  totalIssuesFixed: number;
+  totalErrors: number;
+  totalWarnings: number;
+  streak: number;
+  badges: string[];
+  points: number;
+}
+
+export interface Badge {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  points: number;
+}
+
+export interface SecurityFinding {
+  id: string;
+  name: string;
+  severity: "critical" | "high" | "medium" | "low" | "info";
+  category: string;
+  description: string;
+  file: string;
+  line: number;
+  code: string;
+}
+
+export interface SecurityScanRequest {
+  repo: string;
+  prNumber?: number;
+  files?: Array<{ path: string; content: string }>;
+}
+
+export interface SecurityScanResponse {
+  repo: string;
+  prNumber: number | null;
+  scannedAt: string;
+  summary: {
+    total: number;
+    critical: number;
+    high: number;
+    medium: number;
+    low: number;
+    categories: string[];
+  };
+  findings: SecurityFinding[];
+}
+
 export class ApiError extends Error {
   status: number;
 
@@ -334,6 +421,58 @@ class ApiClient {
     return this.request<RepoInstallStatus>(
       `/github-app/check?repo=${encodeURIComponent(repo)}`
     );
+  }
+
+  // ============================================
+  // PR Diff Endpoints
+  // ============================================
+
+  async getPRDiff(repo: string, prNumber: number): Promise<PRDiffResponse> {
+    const [owner, repoName] = repo.split('/');
+    return this.request<PRDiffResponse>(`/pr/${owner}/${repoName}/${prNumber}/diff`);
+  }
+
+  // ============================================
+  // AI Fix Endpoints
+  // ============================================
+
+  async generateFix(data: FixRequest): Promise<FixResponse> {
+    return this.request<FixResponse>('/fix', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  // ============================================
+  // Leaderboard & Gamification Endpoints
+  // ============================================
+
+  async getLeaderboard(
+    repo: string,
+    timeframe: "all" | "week" | "month" = "all"
+  ): Promise<LeaderboardEntry[]> {
+    return this.request<LeaderboardEntry[]>(
+      `/leaderboard?repo=${encodeURIComponent(repo)}&timeframe=${timeframe}`
+    );
+  }
+
+  async getAllBadges(): Promise<Badge[]> {
+    return this.request<Badge[]>('/badges');
+  }
+
+  async getBadgeInfo(badgeId: string): Promise<Badge> {
+    return this.request<Badge>(`/badges/${encodeURIComponent(badgeId)}`);
+  }
+
+  // ============================================
+  // Security Scanner Endpoints
+  // ============================================
+
+  async scanSecurity(data: SecurityScanRequest): Promise<SecurityScanResponse> {
+    return this.request<SecurityScanResponse>('/security/scan', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
   }
 }
 

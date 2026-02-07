@@ -2,19 +2,25 @@
 
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Search, Loader2 } from "lucide-react";
+import { Search, Loader2, EyeOff, RotateCcw } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { RepoSelector } from "@/components/dashboard/repo-selector";
 import { ConventionCard } from "@/components/conventions/convention-card";
 import { CategoryFilter } from "@/components/conventions/category-filter";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/lib/auth-context";
+import { useIgnoredConventions } from "@/hooks/use-ignored-conventions";
 import apiClient, { type Convention } from "@/lib/api";
 
 export default function ConventionsPage() {
   const { selectedRepo } = useAuth();
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [showIgnored, setShowIgnored] = useState(false);
+  const { isIgnored, toggleIgnore, ignoredCount, clearIgnored } = useIgnoredConventions(selectedRepo);
 
   const { data: conventions, isLoading, error } = useQuery({
     queryKey: ["conventions", selectedRepo],
@@ -42,6 +48,7 @@ export default function ConventionsPage() {
     return conventions.filter((convention) => {
       const title = convention.title || convention.rule || "";
       const description = convention.description || "";
+      const conventionId = convention.id || `${convention.category}-${title}`.slice(0, 50);
       const query = searchQuery.toLowerCase();
       const matchesSearch =
         !searchQuery ||
@@ -49,9 +56,10 @@ export default function ConventionsPage() {
         description.toLowerCase().includes(query);
       const matchesCategory =
         !selectedCategory || convention.category === selectedCategory;
-      return matchesSearch && matchesCategory;
+      const matchesIgnored = showIgnored || !isIgnored(conventionId);
+      return matchesSearch && matchesCategory && matchesIgnored;
     });
-  }, [conventions, searchQuery, selectedCategory]);
+  }, [conventions, searchQuery, selectedCategory, showIgnored, isIgnored]);
 
   return (
     <div className="space-y-6">
@@ -95,13 +103,41 @@ export default function ConventionsPage() {
                 onCategoryChange={setSelectedCategory}
               />
             )}
+
+            {/* Ignored toggle */}
+            {ignoredCount > 0 && (
+              <div className="flex items-center gap-4">
+                <div className="flex items-center space-x-2">
+                  <Switch
+                    id="show-ignored"
+                    checked={showIgnored}
+                    onCheckedChange={setShowIgnored}
+                  />
+                  <Label htmlFor="show-ignored" className="text-sm">
+                    Show ignored ({ignoredCount})
+                  </Label>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={clearIgnored}
+                  className="text-xs"
+                >
+                  <RotateCcw className="h-3 w-3 mr-1" />
+                  Reset all
+                </Button>
+              </div>
+            )}
           </div>
 
           {/* Results count */}
           {!isLoading && conventions && (
-            <p className="text-sm text-muted-foreground">
-              Showing {filteredConventions.length} of {conventions.length} conventions
-            </p>
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-muted-foreground">
+                Showing {filteredConventions.length} of {conventions.length} conventions
+                {ignoredCount > 0 && !showIgnored && ` (${ignoredCount} ignored)`}
+              </p>
+            </div>
           )}
 
           {/* Convention Cards */}
@@ -137,9 +173,17 @@ export default function ConventionsPage() {
             </div>
           ) : (
             <div className="grid gap-4 md:grid-cols-2">
-              {filteredConventions.map((convention, index) => (
-                <ConventionCard key={convention.id || `convention-${index}`} convention={convention} />
-              ))}
+              {filteredConventions.map((convention, index) => {
+                const conventionId = convention.id || `${convention.category}-${convention.title || convention.rule}`.slice(0, 50);
+                return (
+                  <ConventionCard
+                    key={convention.id || `convention-${index}`}
+                    convention={convention}
+                    isIgnored={isIgnored(conventionId)}
+                    onToggleIgnore={toggleIgnore}
+                  />
+                );
+              })}
             </div>
           )}
         </>
