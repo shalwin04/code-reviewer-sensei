@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
 import {
@@ -14,6 +15,7 @@ import {
   Webhook,
   User,
   Loader2,
+  ChevronRight,
 } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -30,7 +32,7 @@ const statusConfig = {
   failed: { icon: XCircle, color: "text-red-500", bg: "bg-red-500/10", label: "Failed" },
 };
 
-function ReviewCard({ review }: { review: ReviewHistoryItem }) {
+function ReviewCard({ review, onClick }: { review: ReviewHistoryItem; onClick: () => void }) {
   const status = statusConfig[review.status] || statusConfig.pending;
   const StatusIcon = status.icon;
 
@@ -41,7 +43,10 @@ function ReviewCard({ review }: { review: ReviewHistoryItem }) {
   };
 
   return (
-    <Card className="hover:border-primary/50 transition-colors">
+    <Card
+      className="hover:border-primary/50 transition-colors cursor-pointer group"
+      onClick={onClick}
+    >
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-3 min-w-0">
@@ -79,7 +84,7 @@ function ReviewCard({ review }: { review: ReviewHistoryItem }) {
               </CardDescription>
             </div>
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
+          <div className="flex items-center gap-3 flex-shrink-0">
             <Badge variant="outline" className={status.color}>
               {status.label}
             </Badge>
@@ -88,6 +93,7 @@ function ReviewCard({ review }: { review: ReviewHistoryItem }) {
                 {review.score}
               </div>
             )}
+            <ChevronRight className="h-5 w-5 text-muted-foreground group-hover:text-primary transition-colors" />
           </div>
         </div>
       </CardHeader>
@@ -118,7 +124,7 @@ function ReviewCard({ review }: { review: ReviewHistoryItem }) {
                 <span>No issues found</span>
               </div>
             )}
-            <div className="ml-auto">
+            <div className="ml-auto" onClick={(e) => e.stopPropagation()}>
               <Button variant="ghost" size="sm" asChild>
                 <a href={review.pr_url} target="_blank" rel="noopener noreferrer">
                   View PR
@@ -168,6 +174,7 @@ function ReviewHistorySkeleton() {
 }
 
 export default function ReviewsPage() {
+  const router = useRouter();
   const { selectedRepo } = useAuth();
 
   const { data: reviews, isLoading, error } = useQuery({
@@ -258,7 +265,11 @@ export default function ReviewsPage() {
           ) : reviews && reviews.length > 0 ? (
             <div className="space-y-4">
               {reviews.map((review) => (
-                <ReviewCard key={review.id} review={review} />
+                <ReviewCard
+                  key={review.id}
+                  review={review}
+                  onClick={() => router.push(`/reviews/${review.id}`)}
+                />
               ))}
             </div>
           ) : (

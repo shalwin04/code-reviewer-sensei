@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { CheckCircle, AlertCircle, AlertTriangle, Lightbulb, BarChart3, Loader2 } from "lucide-react";
 import { ReviewForm } from "@/components/review/review-form";
@@ -9,6 +9,7 @@ import { ViolationCard } from "@/components/review/violation-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Markdown } from "@/components/ui/markdown";
 import { useAuth } from "@/lib/auth-context";
 import apiClient, { type Violation, ApiError } from "@/lib/api";
 
@@ -62,6 +63,7 @@ function normalizeSeverity(severity: any): string {
 
 export default function ReviewPage() {
   const { selectedRepo } = useAuth();
+  const queryClient = useQueryClient();
   const [reviewResult, setReviewResult] = useState<NormalizedReviewResult | null>(null);
 
   const reviewMutation = useMutation({
@@ -72,6 +74,9 @@ export default function ReviewPage() {
     onSuccess: (data) => {
       setReviewResult(data);
       toast.success("Review completed successfully");
+      // Invalidate cache to refresh dashboard and reviews list
+      queryClient.invalidateQueries({ queryKey: ["reviews"] });
+      queryClient.invalidateQueries({ queryKey: ["reviews-dashboard"] });
     },
     onError: (error) => {
       if (error instanceof ApiError) {
@@ -221,9 +226,9 @@ export default function ReviewPage() {
 
                   <div>
                     <h4 className="mb-2 text-sm font-medium">Summary</h4>
-                    <p className="text-sm text-muted-foreground whitespace-pre-wrap">
-                      {reviewResult.summary}
-                    </p>
+                    <div className="text-sm text-muted-foreground">
+                      <Markdown>{reviewResult.summary}</Markdown>
+                    </div>
                   </div>
                 </CardContent>
               </Card>

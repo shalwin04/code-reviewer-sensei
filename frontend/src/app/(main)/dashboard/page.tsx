@@ -6,6 +6,7 @@ import { RepoSelector } from "@/components/dashboard/repo-selector";
 import { StatsCards } from "@/components/dashboard/stats-cards";
 import { ActivityFeed } from "@/components/dashboard/activity-feed";
 import { QuickActions } from "@/components/dashboard/quick-actions";
+import { ReviewCharts } from "@/components/dashboard/review-charts";
 import { useAuth } from "@/lib/auth-context";
 import apiClient, { ApiError } from "@/lib/api";
 import { toast } from "sonner";
@@ -37,6 +38,21 @@ export default function DashboardPage() {
           };
         }
         throw err;
+      }
+    },
+    enabled: !!selectedRepo,
+    retry: false,
+  });
+
+  // Fetch review history for charts
+  const { data: reviews, isLoading: reviewsLoading } = useQuery({
+    queryKey: ["reviews-dashboard", selectedRepo],
+    queryFn: async () => {
+      if (!selectedRepo) return [];
+      try {
+        return await apiClient.getReviewHistory(selectedRepo, 50);
+      } catch {
+        return [];
       }
     },
     enabled: !!selectedRepo,
@@ -89,6 +105,9 @@ export default function DashboardPage() {
             />
             <QuickActions />
           </div>
+
+          {/* Review Charts */}
+          <ReviewCharts reviews={reviews || []} isLoading={reviewsLoading} />
 
           {/* Category Breakdown */}
           {stats?.byCategory && Object.keys(stats.byCategory).length > 0 && (

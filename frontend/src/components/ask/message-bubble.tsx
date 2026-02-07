@@ -3,6 +3,7 @@
 import { Bot, User } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { TypingAnimation } from "@/components/ui/typing-animation";
+import { Markdown } from "@/components/ui/markdown";
 import { cn } from "@/lib/utils";
 
 export interface Message {
@@ -47,8 +48,12 @@ export function MessageBubble({ message }: MessageBubbleProps) {
           >
             {message.content}
           </TypingAnimation>
-        ) : (
+        ) : isUser ? (
           <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+        ) : (
+          <div className="text-sm">
+            <Markdown>{message.content}</Markdown>
+          </div>
         )}
       </div>
     </div>

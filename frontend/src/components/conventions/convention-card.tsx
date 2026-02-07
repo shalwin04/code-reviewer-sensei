@@ -1,8 +1,26 @@
 "use client";
 
-import { AlertCircle, AlertTriangle, Lightbulb, Info } from "lucide-react";
+import {
+  AlertCircle,
+  AlertTriangle,
+  Lightbulb,
+  Info,
+  FileCode,
+  GitPullRequest,
+  FileText,
+  BookOpen,
+  Wrench,
+  Clock,
+  ExternalLink,
+} from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
 import type { Convention } from "@/lib/api";
 
 interface ConventionCardProps {
@@ -41,7 +59,6 @@ const severityConfig: Record<string, {
   },
 };
 
-// Default config for unknown severity types
 const defaultConfig = {
   icon: Info,
   color: "text-muted-foreground",
@@ -49,31 +66,123 @@ const defaultConfig = {
   label: "Note",
 };
 
-// Helper to get source display text
-function getSourceText(source: Convention["source"]): string | null {
-  if (!source) return null;
-  if (typeof source === "string") return source;
-  // Handle object format: { type, reference, timestamp }
-  if (source.reference) return source.reference;
-  if (source.type) return source.type;
-  return null;
+const sourceTypeConfig: Record<string, {
+  icon: typeof FileCode;
+  label: string;
+  color: string;
+}> = {
+  codebase: {
+    icon: FileCode,
+    label: "Codebase",
+    color: "text-purple-500",
+  },
+  "pr-review": {
+    icon: GitPullRequest,
+    label: "PR Review",
+    color: "text-green-500",
+  },
+  adr: {
+    icon: FileText,
+    label: "ADR",
+    color: "text-blue-500",
+  },
+  incident: {
+    icon: AlertCircle,
+    label: "Incident",
+    color: "text-red-500",
+  },
+  manual: {
+    icon: Wrench,
+    label: "Manual",
+    color: "text-orange-500",
+  },
+  documentation: {
+    icon: BookOpen,
+    label: "Docs",
+    color: "text-cyan-500",
+  },
+};
+
+// Helper to parse source info
+function parseSource(source: Convention["source"]): {
+  type: string | null;
+  reference: string | null;
+  file: string | null;
+  line: number | null;
+  timestamp: string | null;
+} {
+  if (!source) return { type: null, reference: null, file: null, line: null, timestamp: null };
+
+  if (typeof source === "string") {
+    // Try to extract file:line pattern
+    const fileMatch = source.match(/([^:]+):(\d+)/);
+    if (fileMatch) {
+      return {
+        type: "codebase",
+        reference: source,
+        file: fileMatch[1],
+        line: parseInt(fileMatch[2]),
+        timestamp: null,
+      };
+    }
+    return { type: null, reference: source, file: null, line: null, timestamp: null };
+  }
+
+  // Object format
+  const reference = source.reference || "";
+  let file: string | null = null;
+  let line: number | null = null;
+
+  // Try to extract file:line from reference
+  const fileMatch = reference.match(/([^:]+):(\d+)/);
+  if (fileMatch) {
+    file = fileMatch[1];
+    line = parseInt(fileMatch[2]);
+  } else if (reference && !reference.includes("://")) {
+    // Assume it's a file path if it doesn't look like a URL
+    file = reference;
+  }
+
+  return {
+    type: source.type || null,
+    reference,
+    file,
+    line,
+    timestamp: source.timestamp || null,
+  };
+}
+
+function formatTimestamp(timestamp: string): string {
+  try {
+    const date = new Date(timestamp);
+    return date.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  } catch {
+    return timestamp;
+  }
 }
 
 export function ConventionCard({ convention }: ConventionCardProps) {
-  // Get config with fallback to default
   const severityKey = convention.severity?.toLowerCase() || "suggestion";
   const config = severityConfig[severityKey] || defaultConfig;
   const Icon = config.icon;
 
-  // Handle missing fields gracefully - backend uses 'rule' instead of 'title'
   const title = convention.title || convention.rule || convention.description?.slice(0, 50) || "Unnamed Convention";
   const description = convention.description || "No description provided";
   const category = convention.category || "general";
   const confidence = typeof convention.confidence === "number" ? convention.confidence : 0.5;
 
-  // Get first example from examples array if available
-  const example = convention.example || convention.examples?.[0]?.good;
-  const sourceText = getSourceText(convention.source);
+  // Parse source info
+  const sourceInfo = parseSource(convention.source);
+  const sourceTypeConf = sourceInfo.type ? sourceTypeConfig[sourceInfo.type] : null;
+  const SourceIcon = sourceTypeConf?.icon || FileCode;
+
+  // Get examples
+  const examples = convention.examples || [];
+  const singleExample = convention.example || examples[0]?.good;
 
   return (
     <Card className="transition-all hover:border-primary/50 hover:shadow-md">
@@ -106,16 +215,104 @@ export function ConventionCard({ convention }: ConventionCardProps) {
           </div>
         </div>
 
-        {/* Example */}
-        {example && (
-          <div className="rounded-md bg-muted p-3">
-            <p className="mb-1 text-xs font-medium text-muted-foreground">
-              Example:
-            </p>
-            <pre className="overflow-x-auto text-xs">
-              <code>{example}</code>
-            </pre>
+        {/* Source Info - Enhanced */}
+        {(sourceInfo.type || sourceInfo.file || sourceInfo.reference) && (
+          <div className="rounded-md border bg-muted/30 p-3 space-y-2">
+            <div className="flex items-center gap-2 text-sm">
+              <SourceIcon className={`h-4 w-4 ${sourceTypeConf?.color || "text-muted-foreground"}`} />
+              <span className="font-medium">
+                {sourceTypeConf?.label || "Source"}
+              </span>
+              {sourceInfo.timestamp && (
+                <span className="text-xs text-muted-foreground flex items-center gap-1 ml-auto">
+                  <Clock className="h-3 w-3" />
+                  {formatTimestamp(sourceInfo.timestamp)}
+                </span>
+              )}
+            </div>
+            {sourceInfo.file && (
+              <div className="flex items-center gap-2 text-xs">
+                <FileCode className="h-3.5 w-3.5 text-muted-foreground" />
+                <code className="bg-muted px-1.5 py-0.5 rounded font-mono">
+                  {sourceInfo.file}
+                  {sourceInfo.line && (
+                    <span className="text-primary">:{sourceInfo.line}</span>
+                  )}
+                </code>
+              </div>
+            )}
+            {sourceInfo.reference && !sourceInfo.file && (
+              <p className="text-xs text-muted-foreground truncate">
+                {sourceInfo.reference.startsWith("http") ? (
+                  <a
+                    href={sourceInfo.reference}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1 hover:text-primary"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {sourceInfo.reference}
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                ) : (
+                  sourceInfo.reference
+                )}
+              </p>
+            )}
           </div>
+        )}
+
+        {/* Examples - Expandable */}
+        {(singleExample || examples.length > 0) && (
+          <Accordion type="single" collapsible className="w-full">
+            <AccordionItem value="examples" className="border-none">
+              <AccordionTrigger className="py-2 text-sm hover:no-underline">
+                <span className="flex items-center gap-2">
+                  <BookOpen className="h-4 w-4" />
+                  Examples ({examples.length || 1})
+                </span>
+              </AccordionTrigger>
+              <AccordionContent className="space-y-3 pt-2">
+                {examples.length > 0 ? (
+                  examples.map((ex, idx) => (
+                    <div key={idx} className="space-y-2">
+                      {ex.good && (
+                        <div className="rounded-md border border-green-500/20 bg-green-500/5 overflow-hidden">
+                          <div className="px-3 py-1 bg-green-500/10 border-b border-green-500/20 text-xs text-green-600 dark:text-green-400 font-medium">
+                            Good
+                          </div>
+                          <pre className="p-3 text-xs overflow-x-auto">
+                            <code>{ex.good}</code>
+                          </pre>
+                        </div>
+                      )}
+                      {ex.bad && (
+                        <div className="rounded-md border border-red-500/20 bg-red-500/5 overflow-hidden">
+                          <div className="px-3 py-1 bg-red-500/10 border-b border-red-500/20 text-xs text-red-600 dark:text-red-400 font-medium">
+                            Bad
+                          </div>
+                          <pre className="p-3 text-xs overflow-x-auto">
+                            <code>{ex.bad}</code>
+                          </pre>
+                        </div>
+                      )}
+                      {ex.explanation && (
+                        <p className="text-xs text-muted-foreground italic">
+                          {ex.explanation}
+                        </p>
+                      )}
+                    </div>
+                  ))
+                ) : singleExample ? (
+                  <div className="rounded-md bg-muted p-3">
+                    <pre className="overflow-x-auto text-xs">
+                      <code>{singleExample}</code>
+                    </pre>
+                  </div>
+                ) : null}
+              </AccordionContent>
+            </AccordionItem>
+          </Accordion>
         )}
 
         {/* Tags */}
@@ -127,13 +324,6 @@ export function ConventionCard({ convention }: ConventionCardProps) {
               </Badge>
             ))}
           </div>
-        )}
-
-        {/* Source */}
-        {sourceText && (
-          <p className="text-xs text-muted-foreground truncate">
-            Source: {sourceText}
-          </p>
         )}
       </CardContent>
     </Card>
