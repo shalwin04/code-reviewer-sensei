@@ -286,37 +286,40 @@ export default function SecurityPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
                 <div className="flex-1 space-y-2">
                   <Label htmlFor="pr-number">PR Number (Optional)</Label>
-                  <Input
-                    id="pr-number"
-                    type="number"
-                    placeholder="e.g., 123"
-                    value={prNumber}
-                    onChange={(e) => setPrNumber(e.target.value)}
-                  />
+                  <div className="flex gap-3">
+                    <Input
+                      id="pr-number"
+                      type="number"
+                      placeholder="e.g., 123"
+                      value={prNumber}
+                      onChange={(e) => setPrNumber(e.target.value)}
+                      className="flex-1"
+                    />
+                    <Button
+                      onClick={handleScan}
+                      disabled={scanMutation.isPending}
+                      className="min-w-[140px]"
+                    >
+                      {scanMutation.isPending ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Scanning...
+                        </>
+                      ) : (
+                        <>
+                          <Search className="mr-2 h-4 w-4" />
+                          Start Scan
+                        </>
+                      )}
+                    </Button>
+                  </div>
                   <p className="text-xs text-muted-foreground">
                     Leave empty to scan the entire repository
                   </p>
                 </div>
-                <Button
-                  onClick={handleScan}
-                  disabled={scanMutation.isPending}
-                  className="min-w-[140px]"
-                >
-                  {scanMutation.isPending ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Scanning...
-                    </>
-                  ) : (
-                    <>
-                      <Search className="mr-2 h-4 w-4" />
-                      Start Scan
-                    </>
-                  )}
-                </Button>
               </div>
             </CardContent>
           </Card>
