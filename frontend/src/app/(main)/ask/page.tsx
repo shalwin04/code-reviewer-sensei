@@ -89,9 +89,9 @@ export default function AskPage() {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col h-[calc(100vh-theme(spacing.16)-theme(spacing.12))]">
       {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-4 flex-shrink-0">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">AI Coach</h1>
           <p className="text-muted-foreground">
@@ -102,15 +102,15 @@ export default function AskPage() {
       </div>
 
       {!selectedRepo ? (
-        <div className="rounded-lg border border-dashed p-12 text-center">
+        <div className="rounded-lg border border-dashed p-12 text-center flex-1 flex items-center justify-center">
           <p className="text-muted-foreground">
             Select a repository to start asking questions
           </p>
         </div>
       ) : (
-        <div className="grid gap-6 lg:grid-cols-[1fr_300px] min-w-0">
+        <div className="grid gap-6 lg:grid-cols-[1fr_300px] min-w-0 flex-1 min-h-0">
           {/* Chat Interface */}
-          <div className="min-w-0">
+          <div className="min-w-0 min-h-0">
             <ChatInterface
               messages={messages}
               onSendMessage={handleSendMessage}
@@ -119,7 +119,7 @@ export default function AskPage() {
           </div>
 
           {/* Sidebar */}
-          <div className="space-y-4">
+          <div className="space-y-4 overflow-y-auto">
             {/* Sample Questions */}
             <Card>
               <CardHeader>
