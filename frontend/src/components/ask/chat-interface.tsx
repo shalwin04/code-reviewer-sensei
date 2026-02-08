@@ -43,29 +43,33 @@ export function ChatInterface({
   };
 
   return (
-    <div className="flex h-[600px] flex-col rounded-lg border border-border/40 bg-card">
+    <div className="flex h-[600px] flex-col rounded-lg border border-border/40 bg-card overflow-hidden">
       {/* Messages Area */}
-      <ScrollArea ref={scrollAreaRef} className="flex-1 p-4">
-        {messages.length === 0 ? (
-          <div className="flex h-full items-center justify-center">
-            <div className="text-center">
-              <p className="text-lg font-medium">Ask the AI Coach</p>
-              <p className="text-sm text-muted-foreground">
-                Ask questions about your codebase conventions
-              </p>
-            </div>
+      <div className="flex-1 overflow-hidden">
+        <ScrollArea ref={scrollAreaRef} className="h-full">
+          <div className="p-4">
+            {messages.length === 0 ? (
+              <div className="flex h-[500px] items-center justify-center">
+                <div className="text-center">
+                  <p className="text-lg font-medium">Ask the AI Coach</p>
+                  <p className="text-sm text-muted-foreground">
+                    Ask questions about your codebase conventions
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {messages.map((message) => (
+                  <MessageBubble key={message.id} message={message} />
+                ))}
+              </div>
+            )}
           </div>
-        ) : (
-          <div className="space-y-4">
-            {messages.map((message) => (
-              <MessageBubble key={message.id} message={message} />
-            ))}
-          </div>
-        )}
-      </ScrollArea>
+        </ScrollArea>
+      </div>
 
       {/* Input Area */}
-      <div className="border-t border-border/40 p-4">
+      <div className="border-t border-border/40 p-4 flex-shrink-0">
         <form onSubmit={handleSubmit} className="flex gap-2">
           <Input
             ref={inputRef}

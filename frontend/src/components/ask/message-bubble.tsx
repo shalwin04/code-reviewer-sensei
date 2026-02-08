@@ -23,18 +23,18 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   return (
     <div
       className={cn(
-        "flex gap-3",
+        "flex gap-3 w-full",
         isUser ? "flex-row-reverse" : "flex-row"
       )}
     >
-      <Avatar className="h-8 w-8">
+      <Avatar className="h-8 w-8 flex-shrink-0">
         <AvatarFallback className={isUser ? "bg-primary" : "bg-muted"}>
           {isUser ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
         </AvatarFallback>
       </Avatar>
       <div
         className={cn(
-          "max-w-[80%] rounded-lg px-4 py-2 min-w-0",
+          "max-w-[80%] rounded-lg px-4 py-2 overflow-hidden",
           isUser
             ? "bg-primary text-primary-foreground"
             : "bg-muted text-foreground"
@@ -42,16 +42,16 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       >
         {message.isTyping ? (
           <TypingAnimation
-            className="text-sm leading-normal [overflow-wrap:anywhere]"
+            className="text-sm leading-normal break-words"
             duration={20}
             showCursor={false}
           >
             {message.content}
           </TypingAnimation>
         ) : isUser ? (
-          <p className="text-sm whitespace-pre-wrap [overflow-wrap:anywhere]">{message.content}</p>
+          <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
         ) : (
-          <div className="text-sm min-w-0">
+          <div className="text-sm overflow-x-auto">
             <Markdown>{message.content}</Markdown>
           </div>
         )}
