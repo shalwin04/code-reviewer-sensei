@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AI Code Reviewer",
-  description: "AI-powered code review assistant that learns your codebase conventions",
+  title: "Core | AI Code Reviewer Sensei",
+  description: "Your AI sensei for code reviews - learns your team's conventions and coaches developers to mastery",
 };
 
 export default function RootLayout({

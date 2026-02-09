@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Code2, Menu, X, LogIn, LogOut, User, Loader2 } from "lucide-react";
+import { Sparkles, Menu, X, LogIn, LogOut, User, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -19,7 +19,7 @@ import { useAuth } from "@/lib/auth-context";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard" },
-  { href: "/ask", label: "AI Coach" },
+  { href: "/ask", label: "Ask Sensei" },
   { href: "/conventions", label: "Conventions" },
   { href: "/review", label: "Review" },
 ];
@@ -33,8 +33,13 @@ export function Navbar() {
     <nav className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container mx-auto flex h-16 items-center justify-between px-4">
         <Link href="/" className="flex items-center gap-2">
-          <Code2 className="h-6 w-6 text-primary" />
-          <span className="font-bold text-xl">AI Code Reviewer</span>
+          <div className="flex items-center justify-center h-8 w-8 rounded-lg bg-gradient-to-br from-primary to-purple-600">
+            <Sparkles className="h-5 w-5 text-white" />
+          </div>
+          <div className="flex flex-col">
+            <span className="font-bold text-lg leading-none">Core</span>
+            <span className="text-[10px] text-muted-foreground leading-none">Code Reviewer Sensei</span>
+          </div>
         </Link>
 
         {/* Desktop Navigation */}

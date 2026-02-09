@@ -93,9 +93,9 @@ export default function AskPage() {
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-4 flex-shrink-0">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">AI Coach</h1>
+          <h1 className="text-3xl font-bold tracking-tight">Ask Sensei</h1>
           <p className="text-muted-foreground">
-            Ask questions about your codebase conventions
+            Your AI mentor for codebase wisdom
           </p>
         </div>
         <RepoSelector />

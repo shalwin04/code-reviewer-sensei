@@ -12,8 +12,8 @@ import { useQueryClient } from "@tanstack/react-query";
 
 const actions = [
   {
-    title: "Ask AI Coach",
-    description: "Get answers about your code conventions",
+    title: "Ask Sensei",
+    description: "Get wisdom about your code conventions",
     href: "/ask",
     icon: MessageSquare,
     color: "bg-blue-500/10 text-blue-500",

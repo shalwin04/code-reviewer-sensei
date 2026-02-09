@@ -51,9 +51,9 @@ export function ChatInterface({
             {messages.length === 0 ? (
               <div className="flex min-h-[300px] items-center justify-center">
                 <div className="text-center">
-                  <p className="text-lg font-medium">Ask the AI Coach</p>
+                  <p className="text-lg font-medium">Ask Sensei</p>
                   <p className="text-sm text-muted-foreground">
-                    Ask questions about your codebase conventions
+                    Your AI mentor awaits your questions
                   </p>
                 </div>
               </div>
